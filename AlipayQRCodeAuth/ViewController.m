@@ -188,7 +188,7 @@
     NSMutableArray *lines = [NSMutableArray array];
     NSSet *hot = [NSSet setWithArray:@[@"app_id",@"pid",@"apiname",@"product_id",@"scope",
         @"auth_type",@"biz_type",@"sign_type",@"sign",@"target_id",@"urlscheme",
-        @"alipay_sdk",@"appname",@"auth_code",@"result_code",@"user_id",@"source",@"state",@"redirect_uri"];
+        @"alipay_sdk",@"appname",@"auth_code",@"result_code",@"user_id",@"source",@"state",@"redirect_uri"]];
     for (NSString *p in pairs) {
         NSRange eq = [p rangeOfString:@"="];
         if (eq.location == NSNotFound) { [lines addObject:p]; continue; }
