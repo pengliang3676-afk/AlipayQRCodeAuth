@@ -1,0 +1,72 @@
+name: AlipayQRCodeAuth
+options:
+  bundleIdPrefix: com.alipayqr
+  deploymentTarget:
+    iOS: "13.0"
+  createIntermediateGroups: true
+  developmentLanguage: zh-Hans
+  compatibilityVersion: "Xcode 14.0"
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_STYLE: Manual
+    ONLY_ACTIVE_ARCH: NO
+    ENABLE_BITCODE: NO
+
+targets:
+  AlipayQRCodeAuth:
+    type: application
+    platform: iOS
+    sources:
+      - path: AlipayQRCodeAuth
+    info:
+      path: AlipayQRCodeAuth/Info.plist
+      properties:
+        CFBundleDisplayName: 支付宝显码
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        CFBundlePackageType: APPL
+        CFBundleSignature: "????"
+        LSRequiresIPhoneOS: true
+        MinimumOSVersion: "13.0"
+        UILaunchStoryboardName: LaunchScreen
+        UIRequiredDeviceCapabilities:
+          - armv7
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+        UIStatusBarStyle: UIStatusBarStyleDefault
+        UIBackgroundModes:
+          - fetch
+        # 接管支付宝 URL Scheme：设备不装支付宝时，第三方 App（百度等）唤起支付宝会跳到本 App
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: com.alipay.client
+            CFBundleURLSchemes:
+              - alipay
+              - alipays
+              - alipayqr
+        LSApplicationQueriesSchemes:
+          - alipay
+          - alipays
+          - alipayqr
+          - baiduboxapp
+          - baiduboxlite
+          - baidunetdisk
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsArbitraryLoadsInWebContent: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alipayqr.qrauth
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: NO
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO

@@ -1,0 +1,72 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build unsigned IPA for TrollStore
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (no code signing)
+        run: |
+          xcodebuild \
+            -project AlipayQRCodeAuth.xcodeproj \
+            -scheme AlipayQRCodeAuth \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            -arch arm64 \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_STYLE=Manual \
+            ONLY_ACTIVE_ARCH=NO \
+            clean build
+
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "Found app: $APP_PATH"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::.app not found in build output"
+            find build/Build/Products -name "*.app"
+            exit 1
+          fi
+          rm -rf Payload
+          mkdir Payload
+          cp -r "$APP_PATH" Payload/
+          BIN_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist")
+          echo "=== Architectures ==="
+          lipo -info "$APP_PATH/$BIN_NAME" || true
+          zip -qr AlipayQRCodeAuth-unsigned.ipa Payload
+          ls -lh AlipayQRCodeAuth-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlipayQRCodeAuth-unsigned-ipa
+          path: AlipayQRCodeAuth-unsigned.ipa
+          retention-days: 30

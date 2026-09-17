@@ -1,0 +1,16 @@
+# XcodeGen 生成
+AlipayQRCodeAuth.xcodeproj/
+
+# Xcode 构建产物
+build/
+DerivedData/
+*.xcarchive
+Payload/
+*.ipa
+
+# macOS
+.DS_Store
+
+# 其他
+*.swp
+*~
