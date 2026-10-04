@@ -149,10 +149,10 @@
         NSError *je = nil;
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&je];
         if (je) { [self fail:@"3015 解析失败"]; return; }
-        NSString *errno = [NSString stringWithFormat:@"%@", json[@"errno"]];
+        NSString *errNo = [NSString stringWithFormat:@"%@", json[@"errno"]];
         NSDictionary *info = json[@"data"][@"3015"];
-        if (![errno isEqualToString:@"0"] || !info) {
-            [self fail:[NSString stringWithFormat:@"3015 errno=%@", errno]];
+        if (![errNo isEqualToString:@"0"] || !info) {
+            [self fail:[NSString stringWithFormat:@"3015 errno=%@", errNo]];
             return;
         }
         NSString *openid = info[@"openid"];

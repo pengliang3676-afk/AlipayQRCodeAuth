@@ -46,11 +46,11 @@
             completion(nil, je ?: [NSError errorWithDomain:@"baidu" code:1 userInfo:nil]);
             return;
         }
-        NSInteger errno = [json[@"errno"] integerValue];
+        NSInteger errNo = [json[@"errno"] integerValue];
         NSString *imgurl = json[@"imgurl"];
         self.sign = json[@"sign"];
-        if (errno != 0 || !imgurl.length) {
-            completion(nil, [NSError errorWithDomain:@"baidu" code:errno userInfo:@{NSLocalizedDescriptionKey: @"getqrcode 失败"}]);
+        if (errNo != 0 || !imgurl.length) {
+            completion(nil, [NSError errorWithDomain:@"baidu" code:errNo userInfo:@{NSLocalizedDescriptionKey: @"getqrcode 失败"}]);
             return;
         }
         if ([imgurl hasPrefix:@"//"]) imgurl = [@"https:" stringByAppendingString:imgurl];
@@ -98,9 +98,9 @@
             });
             return;
         }
-        NSInteger errno = [json[@"errno"] integerValue];
+        NSInteger errNo = [json[@"errno"] integerValue];
         NSString *channelV = json[@"channel_v"];
-        if (errno != 0 || !channelV.length) {
+        if (errNo != 0 || !channelV.length) {
             // 还没扫码，继续轮询
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [self pollOnce:completion];
