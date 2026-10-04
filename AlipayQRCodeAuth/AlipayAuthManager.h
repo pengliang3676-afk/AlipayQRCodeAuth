@@ -18,6 +18,9 @@ NS_ASSUME_NONNULL_BEGIN
                       scheme:(NSString *)scheme
                   completion:(void (^)(BOOL success, NSString *message))completion;
 
+/// 支付宝 SDK 回跳 URL（AppDelegate openURL 时调用）
+- (void)handleStandbyURL:(NSURL *)url;
+
 @end
 
 NS_ASSUME_NONNULL_END
