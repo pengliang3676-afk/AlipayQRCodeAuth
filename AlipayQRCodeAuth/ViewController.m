@@ -157,9 +157,12 @@
         [r appendFormat:@"scheme=%@ host=%@ path=%@\n", url.scheme ?: @"", url.host ?: @"", url.path ?: @""];
         [self appendText:r];
 
-        // 关键：把完整 URL 生成二维码
-        [self showQRForString:url.absoluteString];
-        [self appendText:[NSString stringWithFormat:@"已生成二维码，内容：\n%@\n", url.absoluteString]];
+        // 关键：把 alipays:// 包装成支付宝短链接，扫码后在支付宝内打开
+        NSString *raw = url.absoluteString;
+        NSString *encoded = [raw stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+        NSString *qrContent = [NSString stringWithFormat:@"https://render.alipay.com/p/s/i?scheme=%@", encoded];
+        [self showQRForString:qrContent];
+        [self appendText:[NSString stringWithFormat:@"已生成二维码（短链接包装）：\n%@\n", qrContent]];
     });
 }
 
