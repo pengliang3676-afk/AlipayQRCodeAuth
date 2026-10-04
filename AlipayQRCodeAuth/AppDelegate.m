@@ -23,11 +23,10 @@ didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
 
     // 冷启动时由 URL 拉起
     NSURL *url = launchOptions[UIApplicationLaunchOptionsURLKey];
-    NSString *sourceApp = launchOptions[UIApplicationLaunchOptionsSourceApplicationKey];
     if (url) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            [self.rootVC handleURL:url sourceApplication:sourceApp];
+            [self.rootVC handleOpenURL:url];
         });
     }
     return YES;
@@ -36,8 +35,7 @@ didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
 - (BOOL)application:(UIApplication *)app
             openURL:(NSURL *)url
             options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options {
-    NSString *sourceApp = options[UIApplicationOpenURLOptionsSourceApplicationKey];
-    [self.rootVC handleURL:url sourceApplication:sourceApp];
+    [self.rootVC handleOpenURL:url];
     return YES;
 }
 
@@ -45,12 +43,12 @@ didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
             openURL:(NSURL *)url
   sourceApplication:(NSString *)sourceApplication
          annotation:(id)annotation {
-    [self.rootVC handleURL:url sourceApplication:sourceApplication];
+    [self.rootVC handleOpenURL:url];
     return YES;
 }
 
 - (BOOL)application:(UIApplication *)application handleOpenURL:(NSURL *)url {
-    [self.rootVC handleURL:url sourceApplication:nil];
+    [self.rootVC handleOpenURL:url];
     return YES;
 }
 

@@ -1,15 +1,19 @@
 //
 //  ViewController.m
-//  AlipayQRCodeAuth —— 支付宝授权测试版：收到 alipays:// 直接生成二维码
+//  AlipayQRCodeAuth —— 支付宝授权侦查版
 //
 
 #import "ViewController.h"
-#import <CoreImage/CoreImage.h>
+#import "ProbeLogger.h"
+#import "BaiduLoginManager.h"
+#import "AlipayAuthManager.h"
 
 @interface ViewController ()
 @property (nonatomic, strong) UITextView *logView;
 @property (nonatomic, strong) UIImageView *qrView;
-@property (nonatomic, assign) NSInteger probeIndex;
+@property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UIButton *actionBtn;
+@property (nonatomic, assign) NSInteger step; // 0=未登录 1=已登录可授权 2=授权中
 @end
 
 @implementation ViewController
@@ -18,7 +22,8 @@
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor blackColor];
     [self setupUI];
-    [self appendText:@"支付宝显码测试版\n等待从百度（或其他 App）发起「支付宝提现」…\n\n收到 alipays:// 后会自动生成二维码，用另一台手机支付宝扫码测试。\n"];
+    [self bindLogger];
+    [self startBaiduLogin];
 }
 
 - (void)setupUI {
@@ -31,7 +36,7 @@
 
     UILabel *title = [[UILabel alloc] init];
     title.translatesAutoresizingMaskIntoConstraints = NO;
-    title.text = @"支付宝显码";
+    title.text = @"支付宝授权侦查";
     title.textColor = [UIColor greenColor];
     title.font = [UIFont boldSystemFontOfSize:15];
     [bar addSubview:title];
@@ -52,7 +57,15 @@
     [clearBtn addTarget:self action:@selector(clearAll) forControlEvents:UIControlEventTouchUpInside];
     [bar addSubview:clearBtn];
 
-    // 二维码区域
+    UILabel *status = [[UILabel alloc] init];
+    status.translatesAutoresizingMaskIntoConstraints = NO;
+    status.textColor = [UIColor colorWithRed:0.4 green:0.8 blue:1.0 alpha:1.0];
+    status.font = [UIFont systemFontOfSize:13];
+    status.textAlignment = NSTextAlignmentCenter;
+    status.numberOfLines = 0;
+    [self.view addSubview:status];
+    self.statusLabel = status;
+
     UIImageView *qr = [[UIImageView alloc] init];
     qr.translatesAutoresizingMaskIntoConstraints = NO;
     qr.backgroundColor = [UIColor whiteColor];
@@ -62,6 +75,19 @@
     [self.view addSubview:qr];
     self.qrView = qr;
 
+    UIButton *action = [UIButton buttonWithType:UIButtonTypeSystem];
+    action.translatesAutoresizingMaskIntoConstraints = NO;
+    [action setTitle:@"开始支付宝授权" forState:UIControlStateNormal];
+    [action setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    action.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    action.backgroundColor = [UIColor colorWithRed:0.1 green:0.55 blue:0.9 alpha:1.0];
+    action.layer.cornerRadius = 8;
+    action.clipsToBounds = YES;
+    action.hidden = YES;
+    [action addTarget:self action:@selector(actionTapped) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:action];
+    self.actionBtn = action;
+
     UITextView *tv = [[UITextView alloc] init];
     tv.translatesAutoresizingMaskIntoConstraints = NO;
     tv.editable = NO;
@@ -69,7 +95,6 @@
     tv.backgroundColor = [UIColor blackColor];
     tv.textColor = [UIColor colorWithRed:0.2 green:1.0 blue:0.3 alpha:1.0];
     tv.font = [UIFont fontWithName:@"Menlo" size:11] ?: [UIFont systemFontOfSize:11];
-    tv.autocorrectionType = UITextAutocorrectionTypeNo;
     tv.alwaysBounceVertical = YES;
     [self.view addSubview:tv];
     self.logView = tv;
@@ -88,17 +113,110 @@
         [copyBtn.trailingAnchor constraintEqualToAnchor:clearBtn.leadingAnchor constant:-18],
         [copyBtn.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
 
-        [qr.topAnchor constraintEqualToAnchor:bar.bottomAnchor constant:12],
+        [status.topAnchor constraintEqualToAnchor:bar.bottomAnchor constant:8],
+        [status.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
+        [status.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
+
+        [qr.topAnchor constraintEqualToAnchor:status.bottomAnchor constant:8],
         [qr.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
         [qr.widthAnchor constraintEqualToConstant:220],
         [qr.heightAnchor constraintEqualToConstant:220],
 
-        [tv.topAnchor constraintEqualToAnchor:qr.bottomAnchor constant:12],
+        [action.topAnchor constraintEqualToAnchor:qr.bottomAnchor constant:10],
+        [action.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [action.widthAnchor constraintEqualToConstant:200],
+        [action.heightAnchor constraintEqualToConstant:44],
+
+        [tv.topAnchor constraintEqualToAnchor:action.bottomAnchor constant:10],
         [tv.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [tv.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [tv.bottomAnchor constraintEqualToAnchor:guide.bottomAnchor],
     ]];
 }
+
+- (void)bindLogger {
+    __weak typeof(self) weakSelf = self;
+    [ProbeLogger shared].onAppend = ^(NSString *line) {
+        __strong typeof(weakSelf) self = weakSelf;
+        NSString *cur = self.logView.text ?: @"";
+        self.logView.text = [cur stringByAppendingString:line];
+        if (self.logView.text.length) {
+            [self.logView scrollRangeToVisible:NSMakeRange(self.logView.text.length - 1, 1)];
+        }
+    };
+}
+
+#pragma mark - 百度登录
+
+- (void)startBaiduLogin {
+    self.statusLabel.text = @"正在获取百度登录二维码…";
+    [[BaiduLoginManager shared] fetchLoginQR:^(UIImage *image, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error || !image) {
+                self.statusLabel.text = [NSString stringWithFormat:@"获取二维码失败：%@", error.localizedDescription];
+                return;
+            }
+            self.qrView.image = image;
+            self.statusLabel.text = @"请用「百度App」扫码登录（另一台手机）";
+            [self waitBaiduLogin];
+        });
+    }];
+}
+
+- (void)waitBaiduLogin {
+    [[BaiduLoginManager shared] startWaitingLogin:^(NSString *bduss, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error || !bduss) {
+                self.statusLabel.text = [NSString stringWithFormat:@"登录失败：%@", error.localizedDescription];
+                return;
+            }
+            self.step = 1;
+            self.qrView.image = nil;
+            self.statusLabel.text = @"百度登录成功，点下方按钮开始支付宝授权";
+            self.actionBtn.hidden = NO;
+        });
+    }];
+}
+
+#pragma mark - 支付宝授权
+
+- (void)actionTapped {
+    if (self.step == 1) {
+        self.step = 2;
+        self.actionBtn.enabled = NO;
+        self.actionBtn.backgroundColor = [UIColor grayColor];
+        self.statusLabel.text = @"支付宝授权中… 若弹出网页请在网页里登录/授权";
+        NSString *scheme = [self appScheme];
+        [[AlipayAuthManager shared] runFullAuthWithBDUSS:[BaiduLoginManager shared].bduss
+                                                   scheme:scheme
+                                               completion:^(BOOL success, NSString *message) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.actionBtn.enabled = YES;
+                self.actionBtn.backgroundColor = [UIColor colorWithRed:0.1 green:0.55 blue:0.9 alpha:1.0];
+                if (success) {
+                    self.statusLabel.text = @"支付宝授权成功！";
+                    self.actionBtn.hidden = YES;
+                } else {
+                    self.statusLabel.text = [NSString stringWithFormat:@"未完成：%@", message];
+                    self.step = 1;
+                }
+            });
+        }];
+    }
+}
+
+- (NSString *)appScheme {
+    // 本 App 注册了 alipayqr 等，用一个独立 scheme 承接支付宝回跳
+    return @"alipayqr";
+}
+
+#pragma mark - 外部 URL
+
+- (void)handleOpenURL:(NSURL *)url {
+    [[AlipayAuthManager shared] handleStandbyURL:url];
+}
+
+#pragma mark - 按钮
 
 - (void)copyAll {
     [UIPasteboard generalPasteboard].string = self.logView.text ?: @"";
@@ -107,8 +225,7 @@
 
 - (void)clearAll {
     self.logView.text = @"";
-    self.probeIndex = 0;
-    self.qrView.image = nil;
+    [[ProbeLogger shared] clear];
 }
 
 - (void)flashTitle:(NSString *)t {
@@ -116,53 +233,6 @@
     [self presentViewController:a animated:YES completion:nil];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [a dismissViewControllerAnimated:YES completion:nil];
-    });
-}
-
-- (void)appendText:(NSString *)text {
-    NSString *cur = self.logView.text ?: @"";
-    self.logView.text = [cur stringByAppendingFormat:@"%@\n", text];
-    if (self.logView.text.length) {
-        NSRange bottom = NSMakeRange(self.logView.text.length - 1, 1);
-        [self.logView scrollRangeToVisible:bottom];
-    }
-}
-
-- (void)showQRForString:(NSString *)content {
-    if (!content.length) return;
-    CIFilter *filter = [CIFilter filterWithName:@"CIQRCodeGenerator"];
-    [filter setDefaults];
-    NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding];
-    [filter setValue:data forKey:@"inputMessage"];
-    [filter setValue:@"M" forKey:@"inputCorrectionLevel"];
-    CIImage *ciImage = filter.outputImage;
-    CGFloat scale = 10.0;
-    CIImage *scaled = [ciImage imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
-    UIImage *img = [UIImage imageWithCIImage:scaled];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.qrView.image = img;
-    });
-}
-
-#pragma mark - 接收跳转
-
-- (void)handleURL:(NSURL *)url sourceApplication:(NSString *)sourceApplication {
-    if (!url) return;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.probeIndex += 1;
-        NSMutableString *r = [NSMutableString string];
-        [r appendFormat:@"\n================ 跳转 #%ld ================\n", (long)self.probeIndex];
-        [r appendFormat:@"来源：%@\n", sourceApplication ?: @"(未知)"];
-        [r appendFormat:@"URL：%@\n", url.absoluteString ?: @"(空)"];
-        [r appendFormat:@"scheme=%@ host=%@ path=%@\n", url.scheme ?: @"", url.host ?: @"", url.path ?: @""];
-        [self appendText:r];
-
-        // 关键：把 alipays:// 包装成支付宝短链接，扫码后在支付宝内打开
-        NSString *raw = url.absoluteString;
-        NSString *encoded = [raw stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-        NSString *qrContent = [NSString stringWithFormat:@"https://render.alipay.com/p/s/i/?scheme=%@", encoded];
-        [self showQRForString:qrContent];
-        [self appendText:[NSString stringWithFormat:@"已生成二维码（短链接包装）：\n%@\n", qrContent]];
     });
 }
 

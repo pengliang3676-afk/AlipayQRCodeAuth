@@ -6,5 +6,5 @@
 #import <UIKit/UIKit.h>
 
 @interface ViewController : UIViewController
-- (void)handleURL:(NSURL *)url sourceApplication:(NSString *)sourceApplication;
+- (void)handleOpenURL:(NSURL *)url;
 @end

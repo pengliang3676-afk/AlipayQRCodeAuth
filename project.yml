@@ -9,8 +9,8 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "1.2.1"
-    CURRENT_PROJECT_VERSION: "121"
+    MARKETING_VERSION: "2.0.0"
+    CURRENT_PROJECT_VERSION: "200"
     SWIFT_VERSION: "5.0"
     CODE_SIGNING_ALLOWED: NO
     CODE_SIGNING_REQUIRED: NO
@@ -25,12 +25,25 @@ targets:
     platform: iOS
     sources:
       - path: AlipayQRCodeAuth
+      - path: Vendor/AlipaySDK.bundle
+    dependencies:
+      - framework: Vendor/AlipaySDK.framework
+        embed: false
+        codeSign: false
+      - sdk: SystemConfiguration.framework
+      - sdk: CoreTelephony.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreText.framework
+      - sdk: CoreGraphics.framework
+      - sdk: libc++.tbd
+      - sdk: libz.tbd
+      - sdk: libsqlite3.tbd
     info:
       path: AlipayQRCodeAuth/Info.plist
       properties:
-        CFBundleDisplayName: 支付宝显码
-        CFBundleShortVersionString: "1.2.1"
-        CFBundleVersion: "121"
+        CFBundleDisplayName: 支付宝授权
+        CFBundleShortVersionString: "2.0.0"
+        CFBundleVersion: "200"
         CFBundlePackageType: APPL
         CFBundleSignature: "????"
         LSRequiresIPhoneOS: true
@@ -46,7 +59,7 @@ targets:
         UIStatusBarStyle: UIStatusBarStyleDefault
         UIBackgroundModes:
           - fetch
-        # 接管支付宝 URL Scheme：设备不装支付宝时，第三方 App（百度等）唤起支付宝会跳到本 App
+        # 接管支付宝 URL Scheme（侦查用）
         CFBundleURLTypes:
           - CFBundleTypeRole: Editor
             CFBundleURLName: com.alipay.client
@@ -68,5 +81,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alipayqr.qrauth
         TARGETED_DEVICE_FAMILY: "1,2"
+        FRAMEWORK_SEARCH_PATHS:
+          - $(SRCROOT)/Vendor
+        OTHER_LDFLAGS: "-ObjC"
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: NO
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
