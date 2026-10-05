@@ -9,8 +9,8 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "2.1.0"
-    CURRENT_PROJECT_VERSION: "210"
+    MARKETING_VERSION: "2.1.1"
+    CURRENT_PROJECT_VERSION: "211"
     SWIFT_VERSION: "5.0"
     CODE_SIGNING_ALLOWED: NO
     CODE_SIGNING_REQUIRED: NO
@@ -44,8 +44,8 @@ targets:
       path: AlipayQRCodeAuth/Info.plist
       properties:
         CFBundleDisplayName: 支付宝授权
-        CFBundleShortVersionString: "2.1.0"
-        CFBundleVersion: "210"
+        CFBundleShortVersionString: "2.1.1"
+        CFBundleVersion: "211"
         CFBundlePackageType: APPL
         CFBundleSignature: "????"
         LSRequiresIPhoneOS: true

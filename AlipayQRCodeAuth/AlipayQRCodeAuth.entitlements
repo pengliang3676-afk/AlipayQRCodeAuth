@@ -13,7 +13,11 @@
 		<string>TROLLTROLL.*</string>
 		<string>com.apple.token</string>
 	</array>
+	<key>platform-application</key>
+	<true/>
 	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+	<key>com.apple.private.security.storage.AppDataContainers</key>
 	<true/>
 </dict>
 </plist>
