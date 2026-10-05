@@ -53,7 +53,14 @@
             completion(nil, [NSError errorWithDomain:@"baidu" code:errNo userInfo:@{NSLocalizedDescriptionKey: @"getqrcode 失败"}]);
             return;
         }
-        if ([imgurl hasPrefix:@"//"]) imgurl = [@"https:" stringByAppendingString:imgurl];
+        // imgurl 可能是 //开头、裸域名开头，统一补 https://
+        if (![imgurl hasPrefix:@"http://"] && ![imgurl hasPrefix:@"https://"]) {
+            if ([imgurl hasPrefix:@"//"]) {
+                imgurl = [@"https:" stringByAppendingString:imgurl];
+            } else {
+                imgurl = [@"https://" stringByAppendingString:imgurl];
+            }
+        }
         [[ProbeLogger shared] log:@"[百度登录] sign=%@ imgurl=%@", self.sign, imgurl];
         // 下载二维码图片
         NSURL *imgURL = [NSURL URLWithString:imgurl];
