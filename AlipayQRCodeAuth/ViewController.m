@@ -1,19 +1,20 @@
 //
 //  ViewController.m
-//  AlipayQRCodeAuth —— 支付宝授权侦查版
+//  AlipayQRCodeAuth —— 支付宝授权侦查版（直接读百度极速 BDUSS）
 //
 
 #import "ViewController.h"
 #import "ProbeLogger.h"
 #import "BaiduLoginManager.h"
 #import "AlipayAuthManager.h"
+#import "BdussFinder.h"
 
 @interface ViewController ()
 @property (nonatomic, strong) UITextView *logView;
-@property (nonatomic, strong) UIImageView *qrView;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *actionBtn;
-@property (nonatomic, assign) NSInteger step; // 0=未登录 1=已登录可授权 2=授权中
+@property (nonatomic, assign) NSInteger step; // 0=找BDUSS 1=可授权 2=授权中
+@property (nonatomic, copy) NSString *bduss;
 @end
 
 @implementation ViewController
@@ -23,7 +24,7 @@
     self.view.backgroundColor = [UIColor blackColor];
     [self setupUI];
     [self bindLogger];
-    [self startBaiduLogin];
+    [self findBDUSS];
 }
 
 - (void)setupUI {
@@ -66,15 +67,6 @@
     [self.view addSubview:status];
     self.statusLabel = status;
 
-    UIImageView *qr = [[UIImageView alloc] init];
-    qr.translatesAutoresizingMaskIntoConstraints = NO;
-    qr.backgroundColor = [UIColor whiteColor];
-    qr.contentMode = UIViewContentModeScaleAspectFit;
-    qr.layer.cornerRadius = 10;
-    qr.clipsToBounds = YES;
-    [self.view addSubview:qr];
-    self.qrView = qr;
-
     UIButton *action = [UIButton buttonWithType:UIButtonTypeSystem];
     action.translatesAutoresizingMaskIntoConstraints = NO;
     [action setTitle:@"开始支付宝授权" forState:UIControlStateNormal];
@@ -113,21 +105,16 @@
         [copyBtn.trailingAnchor constraintEqualToAnchor:clearBtn.leadingAnchor constant:-18],
         [copyBtn.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
 
-        [status.topAnchor constraintEqualToAnchor:bar.bottomAnchor constant:8],
+        [status.topAnchor constraintEqualToAnchor:bar.bottomAnchor constant:14],
         [status.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
         [status.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
 
-        [qr.topAnchor constraintEqualToAnchor:status.bottomAnchor constant:8],
-        [qr.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [qr.widthAnchor constraintEqualToConstant:220],
-        [qr.heightAnchor constraintEqualToConstant:220],
-
-        [action.topAnchor constraintEqualToAnchor:qr.bottomAnchor constant:10],
+        [action.topAnchor constraintEqualToAnchor:status.bottomAnchor constant:14],
         [action.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [action.widthAnchor constraintEqualToConstant:200],
-        [action.heightAnchor constraintEqualToConstant:44],
+        [action.widthAnchor constraintEqualToConstant:220],
+        [action.heightAnchor constraintEqualToConstant:46],
 
-        [tv.topAnchor constraintEqualToAnchor:action.bottomAnchor constant:10],
+        [tv.topAnchor constraintEqualToAnchor:action.bottomAnchor constant:12],
         [tv.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [tv.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [tv.bottomAnchor constraintEqualToAnchor:guide.bottomAnchor],
@@ -146,36 +133,25 @@
     };
 }
 
-#pragma mark - 百度登录
+#pragma mark - 读取 BDUSS
 
-- (void)startBaiduLogin {
-    self.statusLabel.text = @"正在获取百度登录二维码…";
-    [[BaiduLoginManager shared] fetchLoginQR:^(UIImage *image, NSError *error) {
+- (void)findBDUSS {
+    self.statusLabel.text = @"正在读取百度极速版登录凭证…";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        BdussFinder *finder = [[BdussFinder alloc] init];
+        [finder probe];
+        NSString *bduss = [finder foundBDUSS];
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (error || !image) {
-                self.statusLabel.text = [NSString stringWithFormat:@"获取二维码失败：%@", error.localizedDescription];
-                return;
+            if (bduss.length) {
+                self.bduss = bduss;
+                self.step = 1;
+                self.statusLabel.text = @"已读取百度登录凭证，点下方按钮开始支付宝授权";
+                self.actionBtn.hidden = NO;
+            } else {
+                self.statusLabel.text = @"未读到 BDUSS：请确认本机已装并登录百度极速版，且用老版本 Dopamine 越狱（看日志）";
             }
-            self.qrView.image = image;
-            self.statusLabel.text = @"请用「百度App」扫码登录（另一台手机）";
-            [self waitBaiduLogin];
         });
-    }];
-}
-
-- (void)waitBaiduLogin {
-    [[BaiduLoginManager shared] startWaitingLogin:^(NSString *bduss, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (error || !bduss) {
-                self.statusLabel.text = [NSString stringWithFormat:@"登录失败：%@", error.localizedDescription];
-                return;
-            }
-            self.step = 1;
-            self.qrView.image = nil;
-            self.statusLabel.text = @"百度登录成功，点下方按钮开始支付宝授权";
-            self.actionBtn.hidden = NO;
-        });
-    }];
+    });
 }
 
 #pragma mark - 支付宝授权
@@ -185,10 +161,9 @@
         self.step = 2;
         self.actionBtn.enabled = NO;
         self.actionBtn.backgroundColor = [UIColor grayColor];
-        self.statusLabel.text = @"支付宝授权中… 若弹出网页请在网页里登录/授权";
-        NSString *scheme = [self appScheme];
-        [[AlipayAuthManager shared] runFullAuthWithBDUSS:[BaiduLoginManager shared].bduss
-                                                   scheme:scheme
+        self.statusLabel.text = @"支付宝授权中… 若弹出网页/二维码，请用另一台手机的支付宝扫码";
+        [[AlipayAuthManager shared] runFullAuthWithBDUSS:self.bduss
+                                                   scheme:@"alipayqr"
                                                completion:^(BOOL success, NSString *message) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.actionBtn.enabled = YES;
@@ -203,11 +178,6 @@
             });
         }];
     }
-}
-
-- (NSString *)appScheme {
-    // 本 App 注册了 alipayqr 等，用一个独立 scheme 承接支付宝回跳
-    return @"alipayqr";
 }
 
 #pragma mark - 外部 URL

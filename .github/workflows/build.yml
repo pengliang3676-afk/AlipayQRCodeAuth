@@ -46,6 +46,19 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             clean build
 
+      - name: Inject entitlements with ldid
+        run: |
+          # 给二进制注入 TrollStore entitlements（含 no-sandbox，用于读取百度极速 BDUSS）
+          if ! command -v ldid >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install ldid
+          fi
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          BIN_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist")
+          echo "Signing $APP_PATH/$BIN_NAME"
+          ldid -S"$PWD/AlipayQRCodeAuth/AlipayQRCodeAuth.entitlements" "$APP_PATH/$BIN_NAME"
+          echo "=== Verify embedded entitlements ==="
+          codesign -d --entitlements :- "$APP_PATH/$BIN_NAME" 2>/dev/null || true
+
       - name: Package IPA
         run: |
           APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
