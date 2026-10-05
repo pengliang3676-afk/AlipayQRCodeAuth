@@ -26,14 +26,23 @@
     }
     [[ProbeLogger shared] log:@"[BDUSS] no-sandbox 生效，共 %lu 个容器", (unsigned long)containers.count];
 
+    NSMutableArray *allIds = [NSMutableArray array];
+    NSInteger metaFail = 0;
     for (NSString *uuid in containers) {
         NSString *cpath = [root stringByAppendingPathComponent:uuid];
         NSString *bundleId = [self bundleIdForContainer:cpath];
-        if (bundleId && [bundleId.lowercaseString containsString:@"baidu"]) {
-            [[ProbeLogger shared] log:@"[BDUSS] 发现百度系容器：%@ (%@)", bundleId, uuid];
-            [self scanContainer:cpath bundleId:bundleId];
+        if (bundleId) {
+            [allIds addObject:bundleId];
+            if ([bundleId.lowercaseString containsString:@"baidu"]) {
+                [[ProbeLogger shared] log:@"[BDUSS] 发现百度系容器：%@ (%@)", bundleId, uuid];
+                [self scanContainer:cpath bundleId:bundleId];
+            }
+        } else {
+            metaFail++;
         }
     }
+    [[ProbeLogger shared] log:@"[BDUSS] 全部 bundleId（%lu 个，metadata读取失败 %ld）：", (unsigned long)allIds.count, (long)metaFail];
+    [[ProbeLogger shared] log:@"[BDUSS] %@", [allIds componentsJoinedByString:@" | "]];
     if (self.bduss) {
         [[ProbeLogger shared] log:@"[BDUSS] 成功提取 BDUSS=%@", self.bduss];
     } else {
