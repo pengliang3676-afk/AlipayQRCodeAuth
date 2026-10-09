@@ -13,6 +13,7 @@
 @property (nonatomic, copy) void (^authResultHandler)(NSDictionary *resultDic);
 @property (nonatomic, copy) NSString *bduss;
 @property (nonatomic, copy) NSString *scheme;
+@property (nonatomic, copy) NSString *inboundAlipayURL;
 @property (nonatomic, copy) void (^finalCompletion)(BOOL, NSString *);
 @end
 
@@ -431,63 +432,69 @@ static UIButton *ALPMakeBarButton(NSString *title, UIColor *bg, CGFloat fontSize
 
 #pragma mark - 第二步（新）：不调 SDK，直接把授权参数拼成支付宝链接出二维码
 
-/// 签名里的 base64 含 + / =。放进查询串时必须编码，否则 + 会被当成空格，验签失败就是「系统异常」。
-/// 已经编码过的值先解码再编一次，避免 %2B 变成 %252B。
-static NSString *ALPEncodeAuthQuery(NSString *query) {
-    if (!query.length) return @"";
-    NSMutableArray *parts = [NSMutableArray array];
-    NSCharacterSet *unreserved = [NSCharacterSet characterSetWithCharactersInString:
-        @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"];
-    for (NSString *kv in [query componentsSeparatedByString:@"&"]) {
-        if (!kv.length) continue;
-        NSRange eq = [kv rangeOfString:@"="];
-        NSString *key = kv;
-        NSString *val = @"";
-        if (eq.location != NSNotFound) {
-            key = [kv substringToIndex:eq.location];
-            val = [kv substringFromIndex:eq.location + 1];
-        }
-        NSString *decoded = [val stringByRemovingPercentEncoding] ?: val;
-        NSString *enc = [decoded stringByAddingPercentEncodingWithAllowedCharacters:unreserved] ?: @"";
-        [parts addObject:[NSString stringWithFormat:@"%@=%@", key, enc]];
-    }
-    return [parts componentsJoinedByString:@"&"];
-}
-
 static NSString *ALPEncodeURLComponent(NSString *s) {
     NSCharacterSet *unreserved = [NSCharacterSet characterSetWithCharactersInString:
         @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"];
     return [s stringByAddingPercentEncodingWithAllowedCharacters:unreserved] ?: @"";
 }
 
-- (void)showCandidatesForAuthInfo:(NSString *)authInfoStr {
-    [[ProbeLogger shared] log:@"[支付宝] 按 SDK 15.8.40 拼授权链接"];
+/// 和 SDK urlEncode / urlStrWithUnencode 一样：把 : / ? & = % 编进百分号。
+static NSString *ALPJSONQuoted(NSString *s) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@[s ?: @""] options:0 error:nil];
+    NSString *wrapped = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[\"\"]";
+    if (wrapped.length < 2) return @"\"\"";
+    return [wrapped substringWithRange:NSMakeRange(1, wrapped.length - 2)];
+}
 
-    // 实机扫裸的 alipayauth:// 会被支付宝当成普通文本，提示「该内容非支付宝提供」。
-    // 默认改用 SDK 原文模板 https://render.alipay.com/p/s/ulink/?scheme=%@ ，里面再套编码过的协议。
-    // 裸协议仍保留，但不是第 1 个。
-    // mclient/home/exterfaceAssign.htm 是支付收银台（fetchOrderInfoFromH5PayUrl:），扫了会「系统异常」，不放。
-    // auth_V2 / APayRoute 用格式串 `%@%@&%@` 拼：
-    //   alipayauth://platformapi/startapp?
-    //   appId=20000122&approveType=005&scope=kuaijie&prodcutId=WAP_FAST_LOGIN
-    //     （prodcutId 的拼写错误是 SDK 原文）
-    //   再加上百度返回的 authInfo。两个顺序都做成 ulink 候选，因为变参是压栈传的。
-    // 签名值只编码一次；套进 ulink 时整段 scheme 再编码一次（% → %25），解开后签名仍是单层编码。
-    // 百度这条串的 scope 是 auth_user，不是 SDK 后缀里的 kuaijie。
-    NSString *authQuery = ALPEncodeAuthQuery(authInfoStr);
-    NSString *suffix = @"appId=20000122&approveType=005&scope=kuaijie&prodcutId=WAP_FAST_LOGIN";
-    NSString *scheme = @"alipayauth://platformapi/startapp?";
-    NSString *bodyFirst = [NSString stringWithFormat:@"%@%@&%@", scheme, authQuery, suffix];
-    NSString *suffixFirst = [NSString stringWithFormat:@"%@%@&%@", scheme, suffix, authQuery];
-    NSString *ulinkBody = [NSString stringWithFormat:@"https://render.alipay.com/p/s/ulink/?scheme=%@",
-                           ALPEncodeURLComponent(bodyFirst)];
-    NSString *ulinkSuffix = [NSString stringWithFormat:@"https://render.alipay.com/p/s/ulink/?scheme=%@",
-                             ALPEncodeURLComponent(suffixFirst)];
-    NSString *rest = [NSString stringWithFormat:@"https://mclient.alipay.com/service/rest.htm?%@", authQuery];
+/// auth_V2 调支付宝 App 时的载荷。dataString 用百度原串，不再加 kuaijie / WAP 后缀。
+static NSString *ALPAuthClientJSON(NSString *authInfoStr, NSString *callbackScheme) {
+    NSString *scheme = callbackScheme.length ? callbackScheme : @"alipayqr";
+    return [NSString stringWithFormat:
+        @"{\"dataString\":%@,\"fromAppUrlScheme\":%@,\"fromAppUniversalLink\":%@,\"extra\":%@,\"requestType\":%@}",
+        ALPJSONQuoted(authInfoStr),
+        ALPJSONQuoted(scheme),
+        ALPJSONQuoted(@""),
+        ALPJSONQuoted(@""),
+        ALPJSONQuoted(@"SafePay")];
+}
+
+static NSString *ALPUlink(NSString *schemeURL) {
+    return [NSString stringWithFormat:@"https://render.alipay.com/p/s/ulink/?scheme=%@",
+            ALPEncodeURLComponent(schemeURL)];
+}
+
+- (void)showCandidatesForAuthInfo:(NSString *)authInfoStr {
+    [[ProbeLogger shared] log:@"[支付宝] 拼可扫的授权链接（签名保持百度原串）"];
+
+    // 上一版四个候选的实机结果：
+    //   ulink 套 alipayauth:// → 滴两声回首页
+    //   裸 alipayauth:// → 「该内容非支付宝提供」（扫码器不认这个 scheme）
+    //   mclient/service/rest.htm → 「service或partnerId参数为空」
+    // rest.htm 旁边的二进制字符串是支付 service（create.direct.pay / acquire.mr），没有授权用的 service。
+    // 不补假的 partnerId。alipayauth + kuaijie/WAP 后缀也不再做默认：百度签名里已是 scope=auth_user、product_id=APP_FAST_LOGIN。
+    //
+    // SDK 15.8.40 里和「另一台手机扫出来能进支付宝」相关的形状：
+    //   AFServiceAuth 的 appId 是 20000067（0=20000920 发票，1=20000067 账户授权，2=60000157 代扣）
+    //   打开支付宝 App 的模板是 `%@://alipayclient/?%@`，auth 走 callAuth_v2 时 scheme 名是 aliminipayauth
+    //   JSON 键：dataString、fromAppUrlScheme、fromAppUniversalLink、extra、requestType=SafePay
+    //   没装支付宝时的落地页是 https://render.alipay.com/p/s/i?scheme= 套 alipays://platformapi/startapp
+    //   ulink 模板仍是 https://render.alipay.com/p/s/ulink/?scheme=%@
+    // 二进制里没有 ds.alipay.com、qr.alipay.com、openauth。
+    // dataString / url 参数用百度返回的原串，不再先解码再编码签名。
+    NSString *raw = authInfoStr ?: @"";
+    NSString *callback = self.scheme.length ? self.scheme : @"alipayqr";
+    NSString *json = ALPAuthClientJSON(raw, callback);
+    NSString *encodedJSON = ALPEncodeURLComponent(json);
+    NSString *alipaysClient = [NSString stringWithFormat:@"alipays://alipayclient/?%@", encodedJSON];
+    NSString *miniClient = [NSString stringWithFormat:@"aliminipayauth://alipayclient/?%@", encodedJSON];
+    NSString *account = [NSString stringWithFormat:@"alipays://platformapi/startapp?appId=20000067&url=%@",
+                         ALPEncodeURLComponent(raw)];
+    NSString *inbound = self.inboundAlipayURL;
 
     NSMutableArray *items = [NSMutableArray array];
     void (^addURL)(NSString *, NSString *, NSString *, NSString *, NSString *) =
         ^(NSString *seg, NSString *host, NSString *path, NSString *variant, NSString *url) {
+            if (!url.length) return;
             [items addObject:@{
                 @"seg": seg,
                 @"host": host,
@@ -498,10 +505,19 @@ static NSString *ALPEncodeURLComponent(NSString *s) {
             [[ProbeLogger shared] log:@"[支付宝] 候选 %@ %@%@ %@（%lu 字符）",
                 seg, host, path, variant, (unsigned long)url.length];
         };
-    addURL(@"唤起", @"render.alipay.com", @"/p/s/ulink/", @"签名在前", ulinkBody);
-    addURL(@"换序", @"render.alipay.com", @"/p/s/ulink/", @"appId 在前", ulinkSuffix);
-    addURL(@"协议", @"alipayauth://", @"platformapi/startapp", @"明文协议", bodyFirst);
-    addURL(@"网关", @"mclient.alipay.com", @"/service/rest.htm", @"SDK 网关", rest);
+
+    if (inbound.length) {
+        // 百度拉起本 App 的那条 alipays。裸扫曾经只滴声回首页，这里再用 SDK 的 ulink 模板套一次。
+        addURL(@"唤起", @"render.alipay.com", @"/p/s/ulink/", @"百度原链", ALPUlink(inbound));
+        addURL(@"原链", @"alipays://", @"platformapi/startapp", @"百度原样", inbound);
+        addURL(@"客端", @"alipays://", @"alipayclient", @"dataString 原串", alipaysClient);
+        addURL(@"账户", @"alipays://", @"appId=20000067", @"url=原串", account);
+    } else {
+        addURL(@"账户", @"alipays://", @"appId=20000067", @"url=原串", account);
+        addURL(@"唤起", @"render.alipay.com", @"/p/s/ulink/", @"账户授权", ALPUlink(account));
+        addURL(@"客端", @"alipays://", @"alipayclient", @"dataString 原串", alipaysClient);
+        addURL(@"迷你", @"render.alipay.com", @"/p/s/ulink/", @"aliminipayauth", ALPUlink(miniClient));
+    }
 
     [self showQRPager:items];
 }
@@ -528,7 +544,7 @@ static NSString *ALPEncodeURLComponent(NSString *s) {
         vc.modalPresentationStyle = UIModalPresentationFullScreen;
         vc.modalPresentationCapturesStatusBarAppearance = YES;
         self.qrPage = vc;
-        [[ProbeLogger shared] log:@"[二维码] 准备弹出 top=%@（%lu 个候选，默认唤起）",
+        [[ProbeLogger shared] log:@"[二维码] 准备弹出 top=%@（%lu 个候选，默认第 1 个）",
             NSStringFromClass([top class]), (unsigned long)items.count];
         [top presentViewController:vc animated:YES completion:^{
             [[ProbeLogger shared] log:@"[二维码] 已显示（%.0fx%.0f）",
@@ -570,10 +586,13 @@ static NSString *ALPEncodeURLComponent(NSString *s) {
     // 让另一台手机的支付宝来处理。
     NSString *s = url.absoluteString ?: @"";
     if ([s hasPrefix:@"alipays://platformapi/startapp"] ||
-        [s hasPrefix:@"alipay://platformapi/startapp"]) {
-        // 实测：alipays:// 形式的二维码，支付宝扫了只「滴滴两声回首页」，不执行。
-        // 所以不再用那条路，改去百度拿 authInfoStr，再做网页收银台二维码。
-        [[ProbeLogger shared] log:@"[支付宝] 收到唤起式授权请求，改走网页收银台方案"];
+        [s hasPrefix:@"alipay://platformapi/startapp"] ||
+        [s hasPrefix:@"alipays://"] ||
+        [s hasPrefix:@"alipay://"]) {
+        // 留下百度投递的原链，二维码页把它和 ulink 套壳一起给出去。
+        self.inboundAlipayURL = s;
+        [[ProbeLogger shared] log:@"[支付宝] 已保存入站链接（%lu 字符），继续向百度要 authInfoStr",
+            (unsigned long)s.length];
         if (!self.bduss.length) {
             BdussFinder *f = [[BdussFinder alloc] init];
             [f probe];
