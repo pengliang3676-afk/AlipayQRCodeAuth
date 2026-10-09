@@ -95,7 +95,6 @@
         @{@"t": @"① wappaygw 网页收银台（先试这个）", @"u": cB},
         @{@"t": @"② mclient 网页收银台", @"u": cC},
     ];
-    (void)enc;
 
     dispatch_async(dispatch_get_main_queue(), ^{
         // 已经在显示就别再弹（重复 present 会崩）
