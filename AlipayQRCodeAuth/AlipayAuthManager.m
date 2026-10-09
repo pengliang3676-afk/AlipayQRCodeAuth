@@ -109,6 +109,15 @@
     (void)enc;
 
     dispatch_async(dispatch_get_main_queue(), ^{
+        // 已经在显示就别再弹（重复 present 会崩）
+        if (self.qrPage && self.qrPage.presentingViewController) {
+            [[ProbeLogger shared] log:@"[二维码] 已在显示中，跳过"];
+            return;
+        }
+        if (self.qrPage) {
+            [[ProbeLogger shared] log:@"[二维码] 清掉旧的 qrPage"];
+            self.qrPage = nil;
+        }
         UIViewController *top = nil;
         for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
             if (![sc isKindOfClass:UIWindowScene.class]) continue;
