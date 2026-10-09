@@ -8,11 +8,14 @@
 #import "BaiduLoginManager.h"
 #import "AlipayAuthManager.h"
 #import "BdussFinder.h"
+#import "ALPQRCode.h"
 
 @interface ViewController ()
 @property (nonatomic, strong) UITextView *logView;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *actionBtn;
+@property (nonatomic, strong) UIButton *qrTestBtn;
+@property (nonatomic, strong) UIViewController *qrTestPage;
 @property (nonatomic, assign) NSInteger step; // 0=找BDUSS 1=可授权 2=授权中
 @property (nonatomic, copy) NSString *bduss;
 @end
@@ -80,6 +83,19 @@
     [self.view addSubview:action];
     self.actionBtn = action;
 
+    // 二维码自检按钮（不经过提现流程，直接验证编码器）
+    UIButton *qrt = [UIButton buttonWithType:UIButtonTypeSystem];
+    qrt.translatesAutoresizingMaskIntoConstraints = NO;
+    [qrt setTitle:@"二维码自检（不走提现）" forState:UIControlStateNormal];
+    [qrt setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    qrt.titleLabel.font = [UIFont systemFontOfSize:13];
+    qrt.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:0.35 alpha:1.0];
+    qrt.layer.cornerRadius = 8;
+    qrt.clipsToBounds = YES;
+    [qrt addTarget:self action:@selector(qrSelfTest) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:qrt];
+    self.qrTestBtn = qrt;
+
     UITextView *tv = [[UITextView alloc] init];
     tv.translatesAutoresizingMaskIntoConstraints = NO;
     tv.editable = NO;
@@ -114,7 +130,12 @@
         [action.widthAnchor constraintEqualToConstant:220],
         [action.heightAnchor constraintEqualToConstant:46],
 
-        [tv.topAnchor constraintEqualToAnchor:action.bottomAnchor constant:12],
+        [qrt.topAnchor constraintEqualToAnchor:action.bottomAnchor constant:8],
+        [qrt.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [qrt.widthAnchor constraintEqualToConstant:220],
+        [qrt.heightAnchor constraintEqualToConstant:34],
+
+        [tv.topAnchor constraintEqualToAnchor:qrt.bottomAnchor constant:10],
         [tv.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [tv.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [tv.bottomAnchor constraintEqualToAnchor:guide.bottomAnchor],
@@ -183,7 +204,61 @@
 #pragma mark - 外部 URL
 
 - (void)handleOpenURL:(NSURL *)url {
+    [[ProbeLogger shared] log:@"[App] handleOpenURL: %@", url.absoluteString];
     [[AlipayAuthManager shared] handleStandbyURL:url];
+}
+
+#pragma mark - 二维码自检（不经过提现流程）
+
+- (void)qrSelfTest {
+    [[ProbeLogger shared] log:@"[自检] 开始生成测试二维码…"];
+    // 用一条和真实授权串等长的内容，验证编码器在长文本下也能work
+    NSString *demo = [@"https://render.alipay.com/p/s/i?scheme=alipays%3A%2F%2Fplatformapi%2Fstartapp%3FappId%3D20000001%26" stringByAppendingString:
+                      [@"" stringByPaddingToLength:1500 withString:@"pid=2088631028484361&sign=AbCdEf0123456789" startingAtIndex:0]];
+    UIImage *img = [ALPQRCode imageWithText:demo side:900 quiet:4];
+    if (!img) {
+        [[ProbeLogger shared] log:@"[自检] 生成失败"];
+        [self flashTitle:@"生成失败"];
+        return;
+    }
+    [[ProbeLogger shared] log:@"[自检] 生成成功 %.0fx%.0f（内容 %lu 字符）",
+        img.size.width, img.size.height, (unsigned long)demo.length];
+
+    UIViewController *vc = [[UIViewController alloc] init];
+    vc.view.backgroundColor = [UIColor whiteColor];
+    CGRect scr = [UIScreen mainScreen].bounds;
+
+    UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(8, 30, scr.size.width - 16, 40)];
+    lb.text = [NSString stringWithFormat:@"自检二维码（%lu 字符）\n用手机B 扫一下看能不能识别",
+               (unsigned long)demo.length];
+    lb.numberOfLines = 0;
+    lb.font = [UIFont systemFontOfSize:13];
+    lb.textAlignment = NSTextAlignmentCenter;
+    [vc.view addSubview:lb];
+
+    CGFloat side = scr.size.width - 24;
+    UIImageView *iv = [[UIImageView alloc] initWithImage:img];
+    iv.frame = CGRectMake(12, 80, side, side);
+    iv.contentMode = UIViewContentModeScaleAspectFit;
+    [vc.view addSubview:iv];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.frame = CGRectMake(12, 80 + side + 14, scr.size.width - 24, 46);
+    close.backgroundColor = [UIColor colorWithRed:0.1 green:0.55 blue:0.9 alpha:1];
+    close.layer.cornerRadius = 8;
+    [close setTitle:@"关闭" forState:UIControlStateNormal];
+    [close setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [close addTarget:self action:@selector(closeSelfTest) forControlEvents:UIControlEventTouchUpInside];
+    [vc.view addSubview:close];
+
+    vc.modalPresentationStyle = UIModalPresentationFullScreen;
+    self.qrTestPage = vc;
+    [self presentViewController:vc animated:YES completion:nil];
+}
+
+- (void)closeSelfTest {
+    [self.qrTestPage dismissViewControllerAnimated:YES completion:nil];
+    self.qrTestPage = nil;
 }
 
 #pragma mark - 按钮

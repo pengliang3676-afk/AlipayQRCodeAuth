@@ -4,6 +4,7 @@
 
 #import "AlipayAuthManager.h"
 #import "ProbeLogger.h"
+#import "ALPQRCode.h"
 #import <AlipaySDK/AlipaySDK.h>
 
 @interface AlipayAuthManager ()
@@ -263,35 +264,17 @@
         [[ProbeLogger shared] log:@"[二维码] 内容为空"];
         return nil;
     }
-    NSData *d = [text dataUsingEncoding:NSUTF8StringEncoding];
-    Class filtCls = NSClassFromString(@"CIFilter");
-    if (!filtCls) {
-        [[ProbeLogger shared] log:@"[二维码] CIFilter 类不存在（CoreImage 没链接）"];
-        return nil;
+    // 用自己写的编码器（纯 CoreGraphics），完全不碰 CoreImage ——
+    // 崩溃日志显示 CIContext contextWithOptions: 在本机会 SIGSEGV。
+    UIImage *img = [ALPQRCode imageWithText:text side:side quiet:4];
+    if (!img) {
+        [[ProbeLogger shared] log:@"[二维码] 生成失败（内容 %lu 字符）",
+            (unsigned long)text.length];
+    } else {
+        [[ProbeLogger shared] log:@"[二维码] 生成成功 %.0fx%.0f（内容 %lu 字符）",
+            img.size.width, img.size.height, (unsigned long)text.length];
     }
-    CIFilter *f = [filtCls filterWithName:@"CIQRCodeGenerator"];
-    if (!f) {
-        [[ProbeLogger shared] log:@"[二维码] CIQRCodeGenerator 滤镜取不到（CoreImage 没链接）"];
-        return nil;
-    }
-    [f setValue:d forKey:@"inputMessage"];
-    [f setValue:@"L" forKey:@"inputCorrectionLevel"];
-    CIImage *out = f.outputImage;
-    if (!out) return nil;
-    CIContext *ctx = [CIContext contextWithOptions:nil];
-    CGImageRef cg = [ctx createCGImage:out fromRect:out.extent];
-    if (!cg) return nil;
-    UIImage *img = [UIImage imageWithCGImage:cg];
-    CGImageRelease(cg);
-    UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), YES, 1.0);
-    CGContextRef c = UIGraphicsGetCurrentContext();
-    CGContextSetFillColorWithColor(c, [UIColor whiteColor].CGColor);
-    CGContextFillRect(c, CGRectMake(0, 0, side, side));
-    CGContextSetInterpolationQuality(c, kCGInterpolationNone);
-    [img drawInRect:CGRectMake(0, 0, side, side)];
-    UIImage *scaled = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return scaled;
+    return img;
 }
 
 - (void)showQRForAuthURL:(NSString *)alipaysURL {
