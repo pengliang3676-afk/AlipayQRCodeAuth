@@ -91,12 +91,149 @@
 /// AppDelegate openURL 回来时调用（standby）
 - (void)handleStandbyURL:(NSURL *)url {
     [[ProbeLogger shared] log:@"[支付宝] 收到回跳 URL：%@", url.absoluteString];
+
+    // alipays://platformapi/startapp?...&launchKey=... 不是授权结果，
+    // 而是百度发起的「唤起式授权请求」被系统投递到本 App。
+    // 这种情况没法在本机完成（没装支付宝），直接显示二维码，
+    // 让另一台手机的支付宝来处理。
+    NSString *s = url.absoluteString ?: @"";
+    if ([s hasPrefix:@"alipays://platformapi/startapp"] ||
+        [s hasPrefix:@"alipay://platformapi/startapp"]) {
+        [[ProbeLogger shared] log:@"[支付宝] 唤起式授权请求（含 launchKey），转二维码显示"];
+        [self showQRForAuthURL:s];
+        return;
+    }
+
     __weak typeof(self) weakSelf = self;
     [[AlipaySDK defaultService] processAuth_V2Result:url standbyCallback:^(NSDictionary *resultDic) {
         [[ProbeLogger shared] log:@"[支付宝] standbyCallback: %@", resultDic];
         __strong typeof(weakSelf) self = weakSelf;
         if (self.authResultHandler) self.authResultHandler(resultDic);
     }];
+}
+
+#pragma mark - 二维码显示（唤起式授权）
+
+- (UIImage *)qrImageFor:(NSString *)text side:(CGFloat)side {
+    NSData *d = [text dataUsingEncoding:NSUTF8StringEncoding];
+    CIFilter *f = [CIFilter filterWithName:@"CIQRCodeGenerator"];
+    if (!f) return nil;
+    [f setValue:d forKey:@"inputMessage"];
+    [f setValue:@"L" forKey:@"inputCorrectionLevel"];
+    CIImage *out = f.outputImage;
+    if (!out) return nil;
+    CIContext *ctx = [CIContext contextWithOptions:nil];
+    CGImageRef cg = [ctx createCGImage:out fromRect:out.extent];
+    if (!cg) return nil;
+    UIImage *img = [UIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(side, side), YES, 1.0);
+    CGContextRef c = UIGraphicsGetCurrentContext();
+    CGContextSetFillColorWithColor(c, [UIColor whiteColor].CGColor);
+    CGContextFillRect(c, CGRectMake(0, 0, side, side));
+    CGContextSetInterpolationQuality(c, kCGInterpolationNone);
+    [img drawInRect:CGRectMake(0, 0, side, side)];
+    UIImage *scaled = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return scaled;
+}
+
+- (void)showQRForAuthURL:(NSString *)alipaysURL {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *top = nil;
+        for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
+            if (![sc isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *w in ((UIWindowScene *)sc).windows) {
+                UIViewController *r = w.rootViewController;
+                while (r.presentedViewController) r = r.presentedViewController;
+                if (r) { top = r; break; }
+            }
+            if (top) break;
+        }
+        if (!top) return;
+
+        CGRect screen = UIScreen.mainScreen.bounds;
+        CGFloat W = screen.size.width;
+        CGFloat side = W - 40;
+
+        NSString *raw = alipaysURL;
+        NSString *enc = [raw stringByAddingPercentEncodingWithAllowedCharacters:
+                         NSCharacterSet.URLQueryAllowedCharacterSet];
+        NSString *ulink = [NSString stringWithFormat:
+            @"https://render.alipay.com/p/s/i?scheme=%@", enc];
+
+        UIScrollView *sv = [[UIScrollView alloc] initWithFrame:screen];
+        sv.backgroundColor = [UIColor whiteColor];
+
+        CGFloat y = 40;
+        UILabel *t1 = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 26)];
+        t1.text = @"授权请求（唤起式）";
+        t1.font = [UIFont boldSystemFontOfSize:18];
+        t1.textAlignment = NSTextAlignmentCenter;
+        [sv addSubview:t1];
+        y += 32;
+
+        NSArray *items = @[
+            @{@"t": @"① ulink 网页形式（先试这个）", @"u": ulink},
+            @{@"t": @"② 原样 alipays://", @"u": raw},
+        ];
+        for (NSDictionary *it in items) {
+            UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 22)];
+            lb.text = it[@"t"];
+            lb.font = [UIFont boldSystemFontOfSize:14];
+            [sv addSubview:lb];
+            y += 24;
+
+            UIImage *qr = [self qrImageFor:it[@"u"] side:side];
+            if (qr) {
+                UIImageView *iv = [[UIImageView alloc] initWithImage:qr];
+                iv.frame = CGRectMake(20, y, side, side);
+                [sv addSubview:iv];
+                y += side + 6;
+            }
+            UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 18)];
+            m.text = [NSString stringWithFormat:@"%lu 字符", (unsigned long)[it[@"u"] length]];
+            m.font = [UIFont systemFontOfSize:11];
+            m.textColor = [UIColor grayColor];
+            m.textAlignment = NSTextAlignmentCenter;
+            [sv addSubview:m];
+            y += 28;
+        }
+
+        UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(12, y, W - 24, 120)];
+        tv.text = raw;
+        tv.font = [UIFont systemFontOfSize:10];
+        tv.editable = NO;
+        tv.selectable = YES;
+        tv.backgroundColor = [UIColor colorWithWhite:0.95 alpha:1];
+        [sv addSubview:tv];
+        y += 128;
+
+        UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+        close.frame = CGRectMake(12, y, W - 24, 46);
+        close.backgroundColor = [UIColor colorWithRed:0.1 green:0.55 blue:0.9 alpha:1];
+        close.layer.cornerRadius = 8;
+        [close setTitle:@"关闭" forState:UIControlStateNormal];
+        [close setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        [close addTarget:self action:@selector(dismissQR) forControlEvents:UIControlEventTouchUpInside];
+        [sv addSubview:close];
+        y += 60;
+
+        sv.contentSize = CGSizeMake(W, y);
+
+        UIViewController *vc = [[UIViewController alloc] init];
+        vc.view.frame = screen;
+        vc.view.backgroundColor = [UIColor whiteColor];
+        [vc.view addSubview:sv];
+        self.qrPage = vc;
+        vc.modalPresentationStyle = UIModalPresentationFullScreen;
+        [top presentViewController:vc animated:YES completion:nil];
+    });
+}
+
+- (void)dismissQR {
+    [self.qrPage dismissViewControllerAnimated:YES completion:nil];
+    self.qrPage = nil;
 }
 
 - (void)handleAuthV2Result:(NSDictionary *)resultDic {

@@ -4,12 +4,16 @@
 //
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
 @interface AlipayAuthManager : NSObject
 
 + (instancetype)shared;
+
+/// 二维码页面（唤起式授权时显示）
+@property (nonatomic, strong, nullable) UIViewController *qrPage;
 
 /// 完整流程：cmd=3016 → 支付宝 SDK authV2（可能弹 H5 收银台）→ cmd=3015 → activity.update
 /// @param bduss 百度扫码登录拿到的 BDUSS

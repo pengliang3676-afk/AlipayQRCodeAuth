@@ -6,8 +6,15 @@
 
 #import "ALPNetworkLogger.h"
 #import "ProbeLogger.h"
+#import <objc/runtime.h>
 
 static NSString * const kALPHandled = @"ALPNetworkLoggerHandled";
+
+// NSURLProtocol 的 request / client 在子类里要显式声明才能用点语法
+@interface NSURLProtocol (ALPAccess)
+@property (readonly, copy) NSURLRequest *request;
+@property (readonly, retain) id<NSURLProtocolClient> client;
+@end
 
 @interface ALPNetworkLogger ()
 @end
@@ -22,11 +29,9 @@ static NSString * const kALPHandled = @"ALPNetworkLoggerHandled";
 #pragma mark - NSURLProtocol
 
 + (BOOL)canInitWithRequest:(NSURLRequest *)request {
-    // 已经处理过的不再重复
     if ([NSURLProtocol propertyForKey:kALPHandled inRequest:request]) return NO;
     NSString *scheme = request.URL.scheme.lowercaseString;
     if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) return NO;
-    // 只抓支付宝/百度相关，其它放过（省日志）
     NSString *h = request.URL.host.lowercaseString;
     if ([h containsString:@"alipay"] || [h containsString:@"baidu"] ||
         [h containsString:@"alicdn"] || [h containsString:@"alibaba"]) {
@@ -54,7 +59,7 @@ static NSString * const kALPHandled = @"ALPNetworkLoggerHandled";
     NSURLSessionDataTask *t = [s dataTaskWithRequest:m completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         __strong typeof(weakSelf) self = weakSelf;
         if (!self) return;
-        NSHTTPURLResponse *hr = [resp isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)resp : nil;
+        NSHTTPURLResponse *hr = [resp isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)resp : nil;
         if (err) {
             [[ProbeLogger shared] log:@"[网络✗] %@ %@ → 错误 %@", method,
                 req.URL.absoluteString, err.localizedDescription];
@@ -63,7 +68,6 @@ static NSString * const kALPHandled = @"ALPNetworkLoggerHandled";
         }
         [[ProbeLogger shared] log:@"[网络←] HTTP %ld 长度 %lu  %@", (long)hr.statusCode,
             (unsigned long)data.length, req.URL.absoluteString];
-        // 如果是文本且不大，记前 600 字符
         if (data.length > 0 && data.length < 30000) {
             NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
             if (body.length) {
@@ -75,8 +79,8 @@ static NSString * const kALPHandled = @"ALPNetworkLoggerHandled";
         [self.client URLProtocol:self didLoadData:data];
         [self.client URLProtocolDidFinishLoading:self];
     }];
-    [t resume];
     objc_setAssociatedObject(self, "alpTask", t, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [t resume];
 }
 
 - (void)stopLoading {
