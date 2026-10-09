@@ -51,10 +51,30 @@
 }
 
 - (NSString *)bundleIdForContainer:(NSString *)path {
-    NSString *meta = [path stringByAppendingPathComponent:@".com.apple.mobile_container_manager_metadata.plist"];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:meta]) return nil;
-    NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:meta];
-    return d[@"MCMMetadataIdentifier"];
+    // 注意：真机上的文件名是 .com.apple.mobile_container_manager.metadata.plist
+    // （container_manager 后面有一个点）。2.1.2 写成 ..._manager_metadata... ，
+    // 导致 165 个容器全部读不出 bundleId。
+    NSArray<NSString *> *names = @[
+        @".com.apple.mobile_container_manager.metadata.plist",
+        @".com.apple.mobile_container_manager_metadata.plist",
+    ];
+    for (NSString *n in names) {
+        NSString *meta = [path stringByAppendingPathComponent:n];
+        if (![[NSFileManager defaultManager] fileExistsAtPath:meta]) continue;
+        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:meta];
+        NSString *ident = d[@"MCMMetadataIdentifier"];
+        if (ident.length) return ident;
+    }
+    // 兜底：Preferences 里常见 <bundleid>.plist，用文件名反推
+    NSString *prefs = [path stringByAppendingPathComponent:@"Library/Preferences"];
+    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:prefs error:nil];
+    for (NSString *f in files) {
+        NSString *low = f.lowercaseString;
+        if ([low containsString:@"baidu"] && [low hasSuffix:@".plist"]) {
+            return [f stringByDeletingPathExtension];
+        }
+    }
+    return nil;
 }
 
 #pragma mark - 扫描容器

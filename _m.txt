@@ -1,0 +1,13 @@
+﻿2.1.3: 修 metadata 文件名（真机是 container_manager.metadata，写成 manager_metadata 导致 165 个容器全部读不到）
+
+真机日志（2.1.2 实测）：
+  [BDUSS] no-sandbox 生效，共 165 个容器
+  [BDUSS] 全部 bundleId（0 个，metadata读取失败 165）：
+
+原因：代码写的是 .com.apple.mobile_container_manager_metadata.plist，
+      真机文件名是 .com.apple.mobile_container_manager.metadata.plist
+      （container_manager 后面有个点）。
+
+改动：
+  1. 优先读正确文件名，同时兼容旧写法
+  2. 兜底：metadata 读不到时，扫 Library/Preferences 里带 baidu 的 plist，用文件名反推 bundleId
