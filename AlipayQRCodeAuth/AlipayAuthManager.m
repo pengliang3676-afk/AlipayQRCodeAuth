@@ -74,6 +74,33 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
     [self render:seg.selectedSegmentIndex];
 }
 
+- (NSString *)currentURL {
+    NSInteger idx = self.alpSeg.selectedSegmentIndex;
+    if (idx < 0 || idx >= (NSInteger)self.alpItems.count) return nil;
+    return self.alpItems[idx][@"u"];
+}
+
+- (void)copyLinkTapped {
+    NSString *u = [self currentURL];
+    if (!u.length) { [self toast:@"没有链接"]; return; }
+    [UIPasteboard generalPasteboard].string = u;
+    [[ProbeLogger shared] log:@"[二维码] 已复制当前链接（%lu 字符）", (unsigned long)u.length];
+    [self toast:@"已复制当前链接"];
+}
+
+- (void)shareTapped:(UIButton *)sender {
+    NSString *u = [self currentURL];
+    if (!u.length) { [self toast:@"没有链接"]; return; }
+    NSMutableArray *items = [NSMutableArray arrayWithObject:u];
+    if (self.alpIV.image) [items addObject:self.alpIV.image];
+    UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:items
+                                                                      applicationActivities:nil];
+    av.popoverPresentationController.sourceView = sender;
+    av.popoverPresentationController.sourceRect = sender.bounds;
+    [[ProbeLogger shared] log:@"[二维码] 分享当前链接（%lu 字符）", (unsigned long)u.length];
+    [self presentViewController:av animated:YES completion:nil];
+}
+
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     [self.alpSeg addTarget:self action:@selector(segTapped:)
@@ -244,71 +271,52 @@ static NSString *ALPEncodeAuthQuery(NSString *query) {
     return [parts componentsJoinedByString:@"&"];
 }
 
-static NSString *ALPDropCertParams(NSString *query) {
-    NSMutableArray *keep = [NSMutableArray array];
-    for (NSString *kv in [query componentsSeparatedByString:@"&"]) {
-        if ([kv hasPrefix:@"alipay_root_cert_sn="]) continue;
-        if ([kv hasPrefix:@"app_cert_sn="]) continue;
-        if (kv.length) [keep addObject:kv];
-    }
-    return [keep componentsJoinedByString:@"&"];
-}
-
-/// 只补签名串里没有的路由参数，不改已经签过的键。
-static NSString *ALPAppendMissing(NSString *query, NSString *extra) {
-    NSMutableSet *keys = [NSMutableSet set];
-    for (NSString *kv in [query componentsSeparatedByString:@"&"]) {
-        NSRange eq = [kv rangeOfString:@"="];
-        if (eq.location != NSNotFound) [keys addObject:[kv substringToIndex:eq.location]];
-    }
-    NSMutableArray *add = [NSMutableArray array];
-    for (NSString *kv in [extra componentsSeparatedByString:@"&"]) {
-        if (!kv.length) continue;
-        NSRange eq = [kv rangeOfString:@"="];
-        NSString *k = eq.location == NSNotFound ? kv : [kv substringToIndex:eq.location];
-        if (![keys containsObject:k]) [add addObject:kv];
-    }
-    if (!add.count) return query;
-    if (!query.length) return [add componentsJoinedByString:@"&"];
-    return [NSString stringWithFormat:@"%@&%@", query, [add componentsJoinedByString:@"&"]];
+static NSString *ALPEncodeURLComponent(NSString *s) {
+    NSCharacterSet *unreserved = [NSCharacterSet characterSetWithCharactersInString:
+        @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"];
+    return [s stringByAddingPercentEncodingWithAllowedCharacters:unreserved] ?: @"";
 }
 
 - (void)showCandidatesForAuthInfo:(NSString *)authInfoStr {
-    [[ProbeLogger shared] log:@"[支付宝] 拼授权 H5 链接（全屏单码）"];
+    [[ProbeLogger shared] log:@"[支付宝] 按 SDK 15.8.40 拼授权链接"];
 
-    // 默认展示第 1 个。SDK 15.8.40 里承接签名串的移动网关是
-    // mclient.alipay.com/home/exterfaceAssign.htm（auth_V2 / alipay.open.auth.sdk.code.get）。
-    // wappaygw 在同一份二进制里的路径是 /service/rest.htm，不是 /home/exterfaceAssign.htm。
-    // 旧代码四个候选都拼成 wappaygw/home/exterfaceAssign.htm，扫出来进支付收银台，
-    // 页面就是「系统异常，请联系商家」。
-    // openauth.alipay.com/oauth2/publicAppAuthorize.htm 不收这串签名参数
-    // （只要 app_id + scope + redirect_uri），之前实测 E004，不再放。
-    // render ulink / alipays:// 扫码不执行，也不放。
-    NSString *full = ALPEncodeAuthQuery(authInfoStr);
-    NSString *shortForm = ALPEncodeAuthQuery(ALPDropCertParams(authInfoStr));
-    // authWithInfo 的 H5 路由串。标明这是登录授权，不是交易。
-    NSString *withRoute = ALPAppendMissing(full,
-        @"view=wap&scope=kuaijie&login_goal=auth&prod_code=WAP_FAST_LOGIN");
+    // 实机扫 mclient/home/exterfaceAssign.htm 会进支付收银台并显示「系统异常，请联系商家」。
+    // 二进制里那条路径只出现在 fetchOrderInfoFromH5PayUrl:（拦支付链接），不在 auth_V2 里。
+    // auth_V2 / APayRoute 用格式串 `%@%@&%@` 拼：
+    //   alipayauth://platformapi/startapp?
+    //   appId=20000122&approveType=005&scope=kuaijie&prodcutId=WAP_FAST_LOGIN
+    //     （prodcutId 的拼写错误是 SDK 原文）
+    //   再加上百度返回的 authInfo。两个顺序都做成候选，因为变参是压栈传的。
+    // 唤起网页用的模板是原文 `https://render.alipay.com/p/s/ulink/?scheme=%@`。
+    // 签名值只编码一次；套进 ulink 时整段 scheme 再编码一次（% → %25），解开后签名仍是单层编码。
+    // 百度这条串的 scope 是 auth_user，不是 SDK 后缀里的 kuaijie。
+    NSString *authQuery = ALPEncodeAuthQuery(authInfoStr);
+    NSString *suffix = @"appId=20000122&approveType=005&scope=kuaijie&prodcutId=WAP_FAST_LOGIN";
+    NSString *scheme = @"alipayauth://platformapi/startapp?";
+    NSString *bodyFirst = [NSString stringWithFormat:@"%@%@&%@", scheme, authQuery, suffix];
+    NSString *suffixFirst = [NSString stringWithFormat:@"%@%@&%@", scheme, suffix, authQuery];
+    NSString *ulinkBody = [NSString stringWithFormat:@"https://render.alipay.com/p/s/ulink/?scheme=%@",
+                           ALPEncodeURLComponent(bodyFirst)];
+    NSString *rest = [NSString stringWithFormat:@"https://mclient.alipay.com/service/rest.htm?%@", authQuery];
 
     NSMutableArray *items = [NSMutableArray array];
-    void (^add)(NSString *, NSString *, NSString *, NSString *, NSString *) =
-        ^(NSString *seg, NSString *host, NSString *path, NSString *variant, NSString *params) {
-            NSString *url = [NSString stringWithFormat:@"https://%@%@?%@", host, path, params];
+    void (^addURL)(NSString *, NSString *, NSString *, NSString *, NSString *) =
+        ^(NSString *seg, NSString *host, NSString *path, NSString *variant, NSString *url) {
             [items addObject:@{
                 @"seg": seg,
-                @"t": variant,
                 @"host": host,
                 @"path": path,
                 @"variant": variant,
                 @"u": url
             }];
-            [[ProbeLogger shared] log:@"[支付宝] 候选 %@ https://%@%@ （%lu 字符）",
-                seg, host, path, (unsigned long)url.length];
+            [[ProbeLogger shared] log:@"[支付宝] 候选 %@ %@%@ %@（%lu 字符）",
+                seg, host, path, variant, (unsigned long)url.length];
         };
-    add(@"m全", @"mclient.alipay.com", @"/home/exterfaceAssign.htm", @"全参数", full);
-    add(@"m短", @"mclient.alipay.com", @"/home/exterfaceAssign.htm", @"去证书号", shortForm);
-    add(@"授权", @"mclient.alipay.com", @"/home/exterfaceAssign.htm", @"全参数 + 授权路由", withRoute);
-    add(@"网关", @"wappaygw.alipay.com", @"/service/rest.htm", @"支付网关·全参数", full);
+    // 默认第 1 个：和当前能扫出来的收银台链接差不多长，二维码放得下。
+    addURL(@"协议", @"alipayauth://", @"platformapi/startapp", @"签名在前", bodyFirst);
+    addURL(@"唤起", @"render.alipay.com", @"/p/s/ulink/", @"签名在前", ulinkBody);
+    addURL(@"换序", @"alipayauth://", @"platformapi/startapp", @"appId 在前", suffixFirst);
+    addURL(@"网关", @"mclient.alipay.com", @"/service/rest.htm", @"SDK 网关", rest);
 
     [self showQRPager:items];
 }
@@ -383,15 +391,42 @@ static NSString *ALPAppendMissing(NSString *query, NSString *extra) {
         seg.apportionsSegmentWidthsByContent = YES;
         [vc.view addSubview:seg];
 
-        UILabel *legend = [[UILabel alloc] initWithFrame:CGRectMake(rx, 144, rw, MIN(64.0, H - 144 - 88))];
+        CGFloat btnH = 30;
+        CGFloat btnGap = 4;
+        CGFloat stackTop = H - 8 - (btnH * 4 + btnGap * 3);
+        UILabel *legend = [[UILabel alloc] initWithFrame:CGRectMake(rx, 142, rw, MAX(0, stackTop - 146))];
         legend.numberOfLines = 0;
         legend.font = [UIFont systemFontOfSize:11];
         legend.textColor = [UIColor grayColor];
         legend.text = [legendLines componentsJoinedByString:@"\n"];
         [vc.view addSubview:legend];
 
+        UIButton *share = [UIButton buttonWithType:UIButtonTypeSystem];
+        share.frame = CGRectMake(rx, stackTop, rw, btnH);
+        share.backgroundColor = [UIColor colorWithRed:0.95 green:0.45 blue:0.1 alpha:1.0];
+        share.layer.cornerRadius = 8;
+        share.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+        share.titleLabel.adjustsFontSizeToFitWidth = YES;
+        share.titleLabel.minimumScaleFactor = 0.6;
+        [share setTitle:@"分享当前链接" forState:UIControlStateNormal];
+        [share setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        [share addTarget:vc action:@selector(shareTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [vc.view addSubview:share];
+
+        UIButton *copy = [UIButton buttonWithType:UIButtonTypeSystem];
+        copy.frame = CGRectMake(rx, stackTop + (btnH + btnGap), rw, btnH);
+        copy.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1.0];
+        copy.layer.cornerRadius = 8;
+        copy.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+        copy.titleLabel.adjustsFontSizeToFitWidth = YES;
+        copy.titleLabel.minimumScaleFactor = 0.6;
+        [copy setTitle:@"复制当前链接" forState:UIControlStateNormal];
+        [copy setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        [copy addTarget:vc action:@selector(copyLinkTapped) forControlEvents:UIControlEventTouchUpInside];
+        [vc.view addSubview:copy];
+
         UIButton *save = [UIButton buttonWithType:UIButtonTypeSystem];
-        save.frame = CGRectMake(rx, H - 82, rw, 36);
+        save.frame = CGRectMake(rx, stackTop + (btnH + btnGap) * 2, rw, btnH);
         save.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:0.35 alpha:1.0];
         save.layer.cornerRadius = 8;
         [save setTitle:@"存到相册" forState:UIControlStateNormal];
@@ -400,7 +435,7 @@ static NSString *ALPAppendMissing(NSString *query, NSString *extra) {
         [vc.view addSubview:save];
 
         UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-        close.frame = CGRectMake(rx, H - 42, rw, 36);
+        close.frame = CGRectMake(rx, stackTop + (btnH + btnGap) * 3, rw, btnH);
         close.backgroundColor = [UIColor colorWithRed:0.1 green:0.55 blue:0.9 alpha:1.0];
         close.layer.cornerRadius = 8;
         [close setTitle:@"关闭" forState:UIControlStateNormal];
