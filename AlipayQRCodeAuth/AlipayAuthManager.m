@@ -5,6 +5,7 @@
 #import "AlipayAuthManager.h"
 #import "ProbeLogger.h"
 #import "ALPQRCode.h"
+#import "BdussFinder.h"
 #import <AlipaySDK/AlipaySDK.h>
 
 @interface AlipayAuthManager ()
@@ -16,6 +17,31 @@
 @end
 
 @implementation AlipayAuthManager
+
+#pragma mark - 取最上层控制器（传统 window 取法）
+
+/// 不能用 UIApplication.connectedScenes / UIWindowScene ——
+/// 本工程没有 UIApplicationSceneManifest，走的是老的 self.window 模式。
+- (UIViewController *)topViewController {
+    UIWindow *keyWin = nil;
+    id<UIApplicationDelegate> del = [UIApplication sharedApplication].delegate;
+    if ([del respondsToSelector:@selector(window)]) {
+        keyWin = [del performSelector:@selector(window)];
+    }
+    if (!keyWin) {
+        for (UIWindow *w in [UIApplication sharedApplication].windows) {
+            if (w.isKeyWindow) { keyWin = w; break; }
+        }
+    }
+    if (!keyWin) keyWin = [UIApplication sharedApplication].windows.firstObject;
+    if (!keyWin) {
+        [[ProbeLogger shared] log:@"[二维码] 取不到 window"];
+        return nil;
+    }
+    UIViewController *r = keyWin.rootViewController;
+    while (r.presentedViewController) r = r.presentedViewController;
+    return r;
+}
 
 + (instancetype)shared {
     static AlipayAuthManager *s;
@@ -120,7 +146,7 @@
         }
         self.qrPage = nil;
 
-        UIViewController *top = [AlipayAuthManager topViewController];
+        UIViewController *top = [self topViewController];
         if (!top) {
             [[ProbeLogger shared] log:@"[二维码] 找不到 topViewController"];
             return;
@@ -247,8 +273,17 @@
     NSString *s = url.absoluteString ?: @"";
     if ([s hasPrefix:@"alipays://platformapi/startapp"] ||
         [s hasPrefix:@"alipay://platformapi/startapp"]) {
-        [[ProbeLogger shared] log:@"[支付宝] 唤起式授权请求（含 launchKey），转二维码显示"];
-        [self showQRForAuthURL:s];
+        // 实测：alipays:// 形式的二维码，支付宝扫了只「滴滴两声回首页」，不执行。
+        // 所以不再用那条路，改去百度拿 authInfoStr，再做网页收银台二维码。
+        [[ProbeLogger shared] log:@"[支付宝] 收到唤起式授权请求，改走网页收银台方案"];
+        if (!self.bduss.length) {
+            BdussFinder *f = [[BdussFinder alloc] init];
+            [f probe];
+            self.bduss = [f foundBDUSS];
+            [[ProbeLogger shared] log:@"[支付宝] 现取 BDUSS：%@",
+                self.bduss.length ? @"成功" : @"失败"];
+        }
+        [self cmd3016];
         return;
     }
 
@@ -260,126 +295,7 @@
     }];
 }
 
-#pragma mark - 二维码显示（唤起式授权）
 
-- (UIImage *)qrImageFor:(NSString *)text side:(CGFloat)side {
-    if (!text.length) {
-        [[ProbeLogger shared] log:@"[二维码] 内容为空"];
-        return nil;
-    }
-    // 用自己写的编码器（纯 CoreGraphics），完全不碰 CoreImage ——
-    // 崩溃日志显示 CIContext contextWithOptions: 在本机会 SIGSEGV。
-    UIImage *img = [ALPQRCode imageWithText:text side:side quiet:4];
-    if (!img) {
-        [[ProbeLogger shared] log:@"[二维码] 生成失败（内容 %lu 字符）",
-            (unsigned long)text.length];
-    } else {
-        [[ProbeLogger shared] log:@"[二维码] 生成成功 %.0fx%.0f（内容 %lu 字符）",
-            img.size.width, img.size.height, (unsigned long)text.length];
-    }
-    return img;
-}
-
-- (void)showQRForAuthURL:(NSString *)alipaysURL {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIViewController *top = nil;
-        for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
-            if (![sc isKindOfClass:UIWindowScene.class]) continue;
-            for (UIWindow *w in ((UIWindowScene *)sc).windows) {
-                UIViewController *r = w.rootViewController;
-                while (r.presentedViewController) r = r.presentedViewController;
-                if (r) { top = r; break; }
-            }
-            if (top) break;
-        }
-        if (!top) return;
-
-        CGRect screen = UIScreen.mainScreen.bounds;
-        CGFloat W = screen.size.width;
-        CGFloat side = W - 40;
-
-        NSString *raw = alipaysURL;
-        NSString *enc = [raw stringByAddingPercentEncodingWithAllowedCharacters:
-                         [NSCharacterSet URLQueryAllowedCharacterSet]];
-        NSString *ulink = [NSString stringWithFormat:
-            @"https://render.alipay.com/p/s/i?scheme=%@", enc];
-
-        UIScrollView *sv = [[UIScrollView alloc] initWithFrame:screen];
-        sv.backgroundColor = [UIColor whiteColor];
-
-        CGFloat y = 40;
-        UILabel *t1 = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 26)];
-        t1.text = @"授权请求（唤起式）";
-        t1.font = [UIFont boldSystemFontOfSize:18];
-        t1.textAlignment = NSTextAlignmentCenter;
-        [sv addSubview:t1];
-        y += 32;
-
-        NSArray *items = @[
-            @{@"t": @"① ulink 网页形式（先试这个）", @"u": ulink},
-            @{@"t": @"② 原样 alipays://", @"u": raw},
-        ];
-        for (NSDictionary *it in items) {
-            UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 22)];
-            lb.text = it[@"t"];
-            lb.font = [UIFont boldSystemFontOfSize:14];
-            [sv addSubview:lb];
-            y += 24;
-
-            UIImage *qr = [self qrImageFor:it[@"u"] side:side];
-            if (qr) {
-                UIImageView *iv = [[UIImageView alloc] initWithImage:qr];
-                iv.frame = CGRectMake(20, y, side, side);
-                [sv addSubview:iv];
-                y += side + 6;
-            } else {
-                UILabel *er = [[UILabel alloc] initWithFrame:CGRectMake(20, y, side, 80)];
-                er.text = @"二维码生成失败";
-                er.numberOfLines = 0;
-                er.textAlignment = NSTextAlignmentCenter;
-                er.textColor = [UIColor redColor];
-                [sv addSubview:er];
-                y += 88;
-            }
-            UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 18)];
-            m.text = [NSString stringWithFormat:@"%lu 字符", (unsigned long)[it[@"u"] length]];
-            m.font = [UIFont systemFontOfSize:11];
-            m.textColor = [UIColor grayColor];
-            m.textAlignment = NSTextAlignmentCenter;
-            [sv addSubview:m];
-            y += 28;
-        }
-
-        UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(12, y, W - 24, 120)];
-        tv.text = raw;
-        tv.font = [UIFont systemFontOfSize:10];
-        tv.editable = NO;
-        tv.selectable = YES;
-        tv.backgroundColor = [UIColor colorWithWhite:0.95 alpha:1];
-        [sv addSubview:tv];
-        y += 128;
-
-        UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-        close.frame = CGRectMake(12, y, W - 24, 46);
-        close.backgroundColor = [UIColor colorWithRed:0.1 green:0.55 blue:0.9 alpha:1];
-        close.layer.cornerRadius = 8;
-        [close setTitle:@"关闭" forState:UIControlStateNormal];
-        [close setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        [close addTarget:self action:@selector(dismissQR) forControlEvents:UIControlEventTouchUpInside];
-        [sv addSubview:close];
-        y += 60;
-
-        sv.contentSize = CGSizeMake(W, y);
-
-        UIViewController *vc = [[UIViewController alloc] init];
-        vc.view.frame = screen;
-        vc.view.backgroundColor = [UIColor whiteColor];
-        [vc.view addSubview:sv];
-        self.qrPage = vc;
-        vc.modalPresentationStyle = UIModalPresentationFullScreen;
-        [top presentViewController:vc animated:YES completion:nil];
-    });
-}
 
 - (void)dismissQR {
     [self.qrPage dismissViewControllerAnimated:YES completion:nil];
