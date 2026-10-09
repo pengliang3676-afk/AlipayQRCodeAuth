@@ -52,18 +52,21 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
 
 - (void)render:(NSInteger)idx {
     if (idx < 0 || idx >= (NSInteger)self.alpItems.count) return;
-    NSString *u = self.alpItems[idx][@"u"];
+    NSDictionary *item = self.alpItems[idx];
+    NSString *u = item[@"u"];
     UIImage *qr = [ALPQRCode imageWithText:u side:self.alpSide quiet:4];
     self.alpIV.image = qr;
+    NSString *host = item[@"host"] ?: @"";
+    NSString *variant = item[@"variant"] ?: @"";
+    NSString *path = item[@"path"] ?: @"";
+    // 大字标明当前码的主机和参数版本。分段控件容易被忽略，扫的人只看这一块。
+    self.alpInfo.text = [NSString stringWithFormat:@"%@\n%@\n%@", host, variant, path];
     if (qr) {
-        [[ProbeLogger shared] log:@"[二维码] 候选 %ld：%lu 字符，图 %.0fx%.0f",
-            (long)idx + 1, (unsigned long)u.length, qr.size.width, qr.size.height];
-        self.alpInfo.text = [NSString stringWithFormat:@"第 %ld 个 · %lu 字符\n图 %.0fx%.0f 像素",
-                             (long)idx + 1, (unsigned long)u.length,
-                             qr.size.width, qr.size.height];
+        [[ProbeLogger shared] log:@"[二维码] 候选 %ld %@ %@%@（%lu 字符，图 %.0fx%.0f）",
+            (long)idx + 1, host, path, variant, (unsigned long)u.length,
+            qr.size.width, qr.size.height];
     } else {
-        self.alpInfo.text = @"生成失败";
-        [[ProbeLogger shared] log:@"[二维码] 候选 %ld 生成失败", (long)idx + 1];
+        [[ProbeLogger shared] log:@"[二维码] 候选 %ld %@ 生成失败", (long)idx + 1, host];
     }
 }
 
@@ -159,6 +162,15 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
     return @"Mozilla/5.0 (iPhone; CPU iPhone OS 13_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 baiduboxapp/6.28.0.10 (Baidu)";
 }
 
+/// mbd / activity 接口都要带登录态。Header 名必须是 User-Agent（带连字符）。
+- (void)applyBaiduSessionHeaders:(NSMutableURLRequest *)req {
+    [req setValue:[self baiduUA] forHTTPHeaderField:@"User-Agent"];
+    if (self.bduss.length) {
+        [req setValue:[NSString stringWithFormat:@"BDUSS=%@", self.bduss]
+   forHTTPHeaderField:@"Cookie"];
+    }
+}
+
 #pragma mark - 入口
 
 - (void)runFullAuthWithBDUSS:(NSString *)bduss scheme:(NSString *)scheme completion:(void (^)(BOOL, NSString *))completion {
@@ -171,10 +183,14 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
 #pragma mark - 第一步：cmd=3016 拿 authInfoStr
 
 - (void)cmd3016 {
+    if (!self.bduss.length) {
+        [self fail:@"没有 BDUSS，百度不会返回绑定到这个账号的 authInfoStr"];
+        return;
+    }
     NSString *u = @"https://mbd.baidu.com/searchbox?action=alipay&cmd=3016&osbranch=i3&osname=baiduboxapp";
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:u]];
-    [req setValue:[self baiduUA] forHTTPHeaderField:@"UserAgent"];
-    [[ProbeLogger shared] log:@"[支付宝] cmd=3016 请求 authInfoStr ..."];
+    [self applyBaiduSessionHeaders:req];
+    [[ProbeLogger shared] log:@"[支付宝] cmd=3016 请求 authInfoStr（Cookie: BDUSS）..."];
     __weak typeof(self) weakSelf = self;
     NSURLSessionDataTask *t = [self.session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         __strong typeof(weakSelf) self = weakSelf;
@@ -183,6 +199,13 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
         NSError *je = nil;
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&je];
         if (je) { [self fail:@"3016 解析失败"]; return; }
+        id errnoVal = json[@"errno"];
+        NSString *errNo = errnoVal ? [NSString stringWithFormat:@"%@", errnoVal] : @"";
+        if (errNo.length && ![errNo isEqualToString:@"0"]) {
+            id msg = json[@"errmsg"] ?: json[@"msg"] ?: @"";
+            [self fail:[NSString stringWithFormat:@"3016 errno=%@ %@", errNo, msg]];
+            return;
+        }
         NSString *authInfoStr = json[@"data"][@"3016"][@"authInfoStr"];
         if (!authInfoStr.length) { [self fail:@"未拿到 authInfoStr"]; return; }
         [[ProbeLogger shared] log:@"[支付宝] authInfoStr=%@", authInfoStr];
@@ -198,35 +221,94 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
 
 #pragma mark - 第二步（新）：不调 SDK，直接把授权参数拼成支付宝链接出二维码
 
-- (void)showCandidatesForAuthInfo:(NSString *)authInfoStr {
-    [[ProbeLogger shared] log:@"[支付宝] 拼网页收银台链接（全屏单码）"];
+/// 签名里的 base64 含 + / =。放进查询串时必须编码，否则 + 会被当成空格，验签失败就是「系统异常」。
+/// 已经编码过的值先解码再编一次，避免 %2B 变成 %252B。
+static NSString *ALPEncodeAuthQuery(NSString *query) {
+    if (!query.length) return @"";
+    NSMutableArray *parts = [NSMutableArray array];
+    NSCharacterSet *unreserved = [NSCharacterSet characterSetWithCharactersInString:
+        @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"];
+    for (NSString *kv in [query componentsSeparatedByString:@"&"]) {
+        if (!kv.length) continue;
+        NSRange eq = [kv rangeOfString:@"="];
+        NSString *key = kv;
+        NSString *val = @"";
+        if (eq.location != NSNotFound) {
+            key = [kv substringToIndex:eq.location];
+            val = [kv substringFromIndex:eq.location + 1];
+        }
+        NSString *decoded = [val stringByRemovingPercentEncoding] ?: val;
+        NSString *enc = [decoded stringByAddingPercentEncodingWithAllowedCharacters:unreserved] ?: @"";
+        [parts addObject:[NSString stringWithFormat:@"%@=%@", key, enc]];
+    }
+    return [parts componentsJoinedByString:@"&"];
+}
 
-    // 实测：wappaygw / mclient 这两个网页收银台能进支付宝授权页；
-    // openauth 报 E004（回调地址没报备），render ulink 被拒绝执行。
-    // 每个都出两个版本：带证书序列号 / 不带 —— 服务端校验口径不确定，都留着试。
-    NSMutableArray *items = [NSMutableArray array];
-
-    NSString *base = authInfoStr;
-    // 去掉证书序列号（服务端可能不需要，能显著降低二维码密度）
+static NSString *ALPDropCertParams(NSString *query) {
     NSMutableArray *keep = [NSMutableArray array];
-    for (NSString *kv in [authInfoStr componentsSeparatedByString:@"&"]) {
+    for (NSString *kv in [query componentsSeparatedByString:@"&"]) {
         if ([kv hasPrefix:@"alipay_root_cert_sn="]) continue;
         if ([kv hasPrefix:@"app_cert_sn="]) continue;
-        [keep addObject:kv];
+        if (kv.length) [keep addObject:kv];
     }
-    NSString *shortForm = [keep componentsJoinedByString:@"&"];
+    return [keep componentsJoinedByString:@"&"];
+}
 
-    void (^add)(NSString *, NSString *) = ^(NSString *tag, NSString *params) {
-        [items addObject:@{
-            @"t": [NSString stringWithFormat:@"%@（%lu 字符）", tag, (unsigned long)params.length],
-            @"u": [NSString stringWithFormat:
-                   @"https://wappaygw.alipay.com/home/exterfaceAssign.htm?%@", params]
-        }];
-    };
-    add(@"① wappaygw 全参数", base);
-    add(@"② wappaygw 去证书号", shortForm);
-    add(@"③ mclient 全参数", base);
-    add(@"④ mclient 去证书号", shortForm);
+/// 只补签名串里没有的路由参数，不改已经签过的键。
+static NSString *ALPAppendMissing(NSString *query, NSString *extra) {
+    NSMutableSet *keys = [NSMutableSet set];
+    for (NSString *kv in [query componentsSeparatedByString:@"&"]) {
+        NSRange eq = [kv rangeOfString:@"="];
+        if (eq.location != NSNotFound) [keys addObject:[kv substringToIndex:eq.location]];
+    }
+    NSMutableArray *add = [NSMutableArray array];
+    for (NSString *kv in [extra componentsSeparatedByString:@"&"]) {
+        if (!kv.length) continue;
+        NSRange eq = [kv rangeOfString:@"="];
+        NSString *k = eq.location == NSNotFound ? kv : [kv substringToIndex:eq.location];
+        if (![keys containsObject:k]) [add addObject:kv];
+    }
+    if (!add.count) return query;
+    if (!query.length) return [add componentsJoinedByString:@"&"];
+    return [NSString stringWithFormat:@"%@&%@", query, [add componentsJoinedByString:@"&"]];
+}
+
+- (void)showCandidatesForAuthInfo:(NSString *)authInfoStr {
+    [[ProbeLogger shared] log:@"[支付宝] 拼授权 H5 链接（全屏单码）"];
+
+    // 默认展示第 1 个。SDK 15.8.40 里承接签名串的移动网关是
+    // mclient.alipay.com/home/exterfaceAssign.htm（auth_V2 / alipay.open.auth.sdk.code.get）。
+    // wappaygw 在同一份二进制里的路径是 /service/rest.htm，不是 /home/exterfaceAssign.htm。
+    // 旧代码四个候选都拼成 wappaygw/home/exterfaceAssign.htm，扫出来进支付收银台，
+    // 页面就是「系统异常，请联系商家」。
+    // openauth.alipay.com/oauth2/publicAppAuthorize.htm 不收这串签名参数
+    // （只要 app_id + scope + redirect_uri），之前实测 E004，不再放。
+    // render ulink / alipays:// 扫码不执行，也不放。
+    NSString *full = ALPEncodeAuthQuery(authInfoStr);
+    NSString *shortForm = ALPEncodeAuthQuery(ALPDropCertParams(authInfoStr));
+    // authWithInfo 的 H5 路由串。标明这是登录授权，不是交易。
+    NSString *withRoute = ALPAppendMissing(full,
+        @"view=wap&scope=kuaijie&login_goal=auth&prod_code=WAP_FAST_LOGIN");
+
+    NSMutableArray *items = [NSMutableArray array];
+    void (^add)(NSString *, NSString *, NSString *, NSString *, NSString *) =
+        ^(NSString *seg, NSString *host, NSString *path, NSString *variant, NSString *params) {
+            NSString *url = [NSString stringWithFormat:@"https://%@%@?%@", host, path, params];
+            [items addObject:@{
+                @"seg": seg,
+                @"t": variant,
+                @"host": host,
+                @"path": path,
+                @"variant": variant,
+                @"u": url
+            }];
+            [[ProbeLogger shared] log:@"[支付宝] 候选 %@ https://%@%@ （%lu 字符）",
+                seg, host, path, (unsigned long)url.length];
+        };
+    add(@"m全", @"mclient.alipay.com", @"/home/exterfaceAssign.htm", @"全参数", full);
+    add(@"m短", @"mclient.alipay.com", @"/home/exterfaceAssign.htm", @"去证书号", shortForm);
+    add(@"授权", @"mclient.alipay.com", @"/home/exterfaceAssign.htm", @"全参数 + 授权路由", withRoute);
+    add(@"网关", @"wappaygw.alipay.com", @"/service/rest.htm", @"支付网关·全参数", full);
 
     [self showQRPager:items];
 }
@@ -270,34 +352,46 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
         CGFloat rx = qrSide + 14;         // 右侧起点
         CGFloat rw = W - rx - 8;
 
-        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(rx, 10, rw, 44)];
-        title.text = @"支付宝授权\n用另一台手机扫左边的码";
-        title.numberOfLines = 0;
-        title.font = [UIFont boldSystemFontOfSize:15];
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(rx, 4, rw, 32)];
+        title.text = @"支付宝授权 · 扫左边的码";
+        title.numberOfLines = 1;
+        title.font = [UIFont boldSystemFontOfSize:14];
+        title.adjustsFontSizeToFitWidth = YES;
+        title.minimumScaleFactor = 0.7;
         [vc.view addSubview:title];
 
-        UILabel *info = [[UILabel alloc] initWithFrame:CGRectMake(rx, 58, rw, 40)];
-        info.numberOfLines = 0;
-        info.font = [UIFont systemFontOfSize:12];
-        info.textColor = [UIColor darkGrayColor];
+        UILabel *info = [[UILabel alloc] initWithFrame:CGRectMake(rx, 38, rw, 68)];
+        info.numberOfLines = 3;
+        info.font = [UIFont boldSystemFontOfSize:17];
+        info.textColor = [UIColor blackColor];
+        info.backgroundColor = [UIColor colorWithRed:1.0 green:0.95 blue:0.7 alpha:1.0];
+        info.adjustsFontSizeToFitWidth = YES;
+        info.minimumScaleFactor = 0.55;
         [vc.view addSubview:info];
 
-        UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:
-            @[@"1", @"2", @"3", @"4"]];
-        seg.frame = CGRectMake(rx, 102, rw, 32);
+        NSMutableArray *segTitles = [NSMutableArray array];
+        NSMutableArray *legendLines = [NSMutableArray array];
+        for (NSDictionary *it in items) {
+            NSString *segName = it[@"seg"] ?: @"?";
+            [segTitles addObject:segName];
+            [legendLines addObject:[NSString stringWithFormat:@"%@  %@ %@",
+                                    segName, it[@"host"] ?: @"", it[@"variant"] ?: @""]];
+        }
+        UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:segTitles];
+        seg.frame = CGRectMake(rx, 110, rw, 30);
         seg.selectedSegmentIndex = 0;
+        seg.apportionsSegmentWidthsByContent = YES;
         [vc.view addSubview:seg];
 
-        UILabel *legend = [[UILabel alloc] initWithFrame:CGRectMake(rx, 138, rw, 70)];
+        UILabel *legend = [[UILabel alloc] initWithFrame:CGRectMake(rx, 144, rw, MIN(64.0, H - 144 - 88))];
         legend.numberOfLines = 0;
         legend.font = [UIFont systemFontOfSize:11];
         legend.textColor = [UIColor grayColor];
-        legend.text = @"1 wappaygw 全参数\n2 wappaygw 去证书号\n"
-                       "3 mclient 全参数\n4 mclient 去证书号";
+        legend.text = [legendLines componentsJoinedByString:@"\n"];
         [vc.view addSubview:legend];
 
         UIButton *save = [UIButton buttonWithType:UIButtonTypeSystem];
-        save.frame = CGRectMake(rx, H - 100, rw, 40);
+        save.frame = CGRectMake(rx, H - 82, rw, 36);
         save.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:0.35 alpha:1.0];
         save.layer.cornerRadius = 8;
         [save setTitle:@"存到相册" forState:UIControlStateNormal];
@@ -306,7 +400,7 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
         [vc.view addSubview:save];
 
         UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-        close.frame = CGRectMake(rx, H - 54, rw, 40);
+        close.frame = CGRectMake(rx, H - 42, rw, 36);
         close.backgroundColor = [UIColor colorWithRed:0.1 green:0.55 blue:0.9 alpha:1.0];
         close.layer.cornerRadius = 8;
         [close setTitle:@"关闭" forState:UIControlStateNormal];
@@ -420,7 +514,7 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
     NSString *u = @"https://mbd.baidu.com/searchbox?action=alipay&cmd=3015&osbranch=i3&osname=baiduboxapp";
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:u]];
     [req setHTTPMethod:@"POST"];
-    [req setValue:[self baiduUA] forHTTPHeaderField:@"UserAgent"];
+    [self applyBaiduSessionHeaders:req];
     [req setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary] forHTTPHeaderField:@"Content-Type"];
 
     NSDictionary *payload = @{@"alipay": @{@"code": authCode}};
@@ -463,8 +557,7 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
     NSString *u = @"https://activity.baidu.com/auth/baiduboxlite/alipay/update";
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:u]];
     [req setHTTPMethod:@"POST"];
-    [req setValue:[NSString stringWithFormat:@"BDUSS=%@", self.bduss] forHTTPHeaderField:@"Cookie"];
-    [req setValue:[self baiduUA] forHTTPHeaderField:@"UserAgent"];
+    [self applyBaiduSessionHeaders:req];
     [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
     NSMutableArray *parts = [NSMutableArray array];
