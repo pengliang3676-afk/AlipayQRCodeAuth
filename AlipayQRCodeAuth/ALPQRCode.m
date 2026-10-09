@@ -354,6 +354,11 @@ static long deinterleave(const uint8_t *cw, long cwLen, int ver, uint8_t *outDat
 @implementation ALPQRCode
 
 + (NSArray<NSArray<NSNumber *> *> *)matrixWithText:(NSString *)text {
+    if (!text.length) return nil;
+    NSData *td = [text dataUsingEncoding:NSISOLatin1StringEncoding];
+    if (!td) td = [text dataUsingEncoding:NSUTF8StringEncoding];
+    int n = (int)td.length;
+
     // 选起始版本
     int startVer = 0;
     for (int v = 1; v <= 40; v++) {
