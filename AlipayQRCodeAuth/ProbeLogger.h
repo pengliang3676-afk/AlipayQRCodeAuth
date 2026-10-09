@@ -11,6 +11,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)shared;
 
+/// 日志文件路径（Documents/probe_log.txt），App 被杀也留着
++ (NSString *)logFilePath;
+
 /// 实时把新增日志回调给 UI
 @property (nonatomic, copy, nullable) void (^onAppend)(NSString *line);
 

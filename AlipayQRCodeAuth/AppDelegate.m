@@ -5,6 +5,8 @@
 
 #import "AppDelegate.h"
 #import "ViewController.h"
+#import "ALPNetworkLogger.h"
+#import "ProbeLogger.h"
 
 @interface AppDelegate ()
 @property (nonatomic, weak) ViewController *rootVC;
@@ -14,6 +16,10 @@
 
 - (BOOL)application:(UIApplication *)application
 didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+
+    // 先装抓包，后面所有请求都记进 probe_log.txt
+    [ALPNetworkLogger install];
+    [[ProbeLogger shared] log:@"[启动] 日志文件：%@", [ProbeLogger logFilePath]];
 
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     ViewController *vc = [[ViewController alloc] init];
