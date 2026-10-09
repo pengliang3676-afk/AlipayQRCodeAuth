@@ -35,20 +35,121 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
 }
 
 
-#pragma mark - 横屏二维码页
+#pragma mark - 二维码页
 
 @interface QRPageVC : UIViewController
 @property (nonatomic, strong) NSArray *alpItems;
 @property (nonatomic, assign) CGFloat alpSide;
+@property (nonatomic, assign) CGFloat alpLaidSide;
+@property (nonatomic, assign) BOOL alpLayingOut;
+@property (nonatomic, strong) UIScrollView *alpScroll;
 @property (nonatomic, strong) UISegmentedControl *alpSeg;
 @property (nonatomic, strong) UIImageView *alpIV;
+@property (nonatomic, strong) UILabel *alpTitle;
 @property (nonatomic, strong) UILabel *alpInfo;
+@property (nonatomic, strong) UIButton *alpShare;
+@property (nonatomic, strong) UIButton *alpCopy;
+@property (nonatomic, strong) UIButton *alpSave;
+@property (nonatomic, strong) UIButton *alpClose;
 @property (nonatomic, weak) AlipayAuthManager *alpAuth;
 @end
+
+static UIButton *ALPMakeBarButton(NSString *title, UIColor *bg, CGFloat fontSize, id target, SEL action) {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.backgroundColor = bg;
+    b.layer.cornerRadius = 10;
+    b.titleLabel.font = [UIFont boldSystemFontOfSize:fontSize];
+    b.titleLabel.adjustsFontSizeToFitWidth = YES;
+    b.titleLabel.minimumScaleFactor = 0.55;
+    [b setTitle:title forState:UIControlStateNormal];
+    [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [b addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
 
 @implementation QRPageVC
 
 - (BOOL)prefersStatusBarHidden { return YES; }
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor whiteColor];
+    self.alpLaidSide = -1;
+
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+    scroll.backgroundColor = [UIColor whiteColor];
+    [self.view addSubview:scroll];
+    self.alpScroll = scroll;
+
+    UILabel *title = [[UILabel alloc] init];
+    title.font = [UIFont boldSystemFontOfSize:16];
+    title.adjustsFontSizeToFitWidth = YES;
+    title.minimumScaleFactor = 0.7;
+    title.text = @"支付宝授权";
+    [scroll addSubview:title];
+    self.alpTitle = title;
+
+    UILabel *info = [[UILabel alloc] init];
+    info.numberOfLines = 3;
+    info.font = [UIFont boldSystemFontOfSize:15];
+    info.textColor = [UIColor blackColor];
+    info.backgroundColor = [UIColor colorWithRed:1.0 green:0.95 blue:0.7 alpha:1.0];
+    info.adjustsFontSizeToFitWidth = YES;
+    info.minimumScaleFactor = 0.5;
+    [scroll addSubview:info];
+    self.alpInfo = info;
+
+    NSMutableArray *segTitles = [NSMutableArray array];
+    for (NSDictionary *it in self.alpItems) {
+        [segTitles addObject:it[@"seg"] ?: @"?"];
+    }
+    UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:segTitles];
+    seg.selectedSegmentIndex = 0;
+    seg.apportionsSegmentWidthsByContent = YES;
+    [seg addTarget:self action:@selector(segTapped:) forControlEvents:UIControlEventValueChanged];
+    [scroll addSubview:seg];
+    self.alpSeg = seg;
+
+    UIImageView *iv = [[UIImageView alloc] init];
+    iv.contentMode = UIViewContentModeScaleAspectFit;
+    iv.backgroundColor = [UIColor whiteColor];
+    [scroll addSubview:iv];
+    self.alpIV = iv;
+
+    UIButton *share = ALPMakeBarButton(@"分享当前链接",
+        [UIColor colorWithRed:0.95 green:0.45 blue:0.1 alpha:1.0], 17,
+        self, @selector(shareTapped:));
+    UIButton *copy = ALPMakeBarButton(@"复制当前链接",
+        [UIColor colorWithWhite:0.22 alpha:1.0], 17,
+        self, @selector(copyLinkTapped));
+    UIButton *save = ALPMakeBarButton(@"存到相册",
+        [UIColor colorWithRed:0.2 green:0.6 blue:0.35 alpha:1.0], 17,
+        self, @selector(saveTapped));
+    [scroll addSubview:share];
+    [scroll addSubview:copy];
+    [scroll addSubview:save];
+    self.alpShare = share;
+    self.alpCopy = copy;
+    self.alpSave = save;
+
+    // 钉在屏幕底部，不放进滚动区域。竖屏时右侧栏会落到屏外，这个按钮必须单独可见。
+    UIButton *close = ALPMakeBarButton(@"关闭",
+        [UIColor colorWithRed:0.82 green:0.12 blue:0.12 alpha:1.0], 22,
+        self, @selector(closeTapped));
+    close.layer.cornerRadius = 12;
+    [self.view addSubview:close];
+    self.alpClose = close;
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self layoutPage];
+}
 
 - (void)render:(NSInteger)idx {
     if (idx < 0 || idx >= (NSInteger)self.alpItems.count) return;
@@ -66,8 +167,96 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
             (long)idx + 1, host, path, variant, (unsigned long)u.length,
             qr.size.width, qr.size.height];
     } else {
-        [[ProbeLogger shared] log:@"[二维码] 候选 %ld %@ 生成失败", (long)idx + 1, host];
+        self.alpInfo.text = [NSString stringWithFormat:@"%@\n%@\n二维码过长，用下方分享", host, variant];
+        [[ProbeLogger shared] log:@"[二维码] 候选 %ld %@ 生成失败（%lu 字符）",
+            (long)idx + 1, host, (unsigned long)u.length];
     }
+}
+
+/// 按当前屏幕的真实宽高排版。关闭按钮钉在安全区底部；其余控件在它上方，放不下就滚动。
+- (void)layoutPage {
+    if (self.alpLayingOut) return;
+    CGRect b = self.view.bounds;
+    UIEdgeInsets safe = self.view.safeAreaInsets;
+    CGFloat pad = 10;
+    CGFloat left = safe.left + pad;
+    CGFloat width = CGRectGetWidth(b) - safe.left - safe.right - pad * 2;
+    if (width < 40 || CGRectGetHeight(b) < 40 || !self.alpClose) return;
+    self.alpLayingOut = YES;
+    [self.view bringSubviewToFront:self.alpClose];
+
+    BOOL landscape = CGRectGetWidth(b) > CGRectGetHeight(b) + 40;
+    CGFloat closeH = landscape ? 48 : 56;
+    CGFloat closeY = CGRectGetHeight(b) - safe.bottom - pad - closeH;
+    self.alpClose.frame = CGRectMake(left, closeY, width, closeH);
+
+    CGFloat scrollH = MAX(0, closeY - 6);
+    self.alpScroll.frame = CGRectMake(0, 0, CGRectGetWidth(b), scrollH);
+
+    CGFloat top = safe.top + 6;
+    CGFloat qrSide = 0;
+    if (landscape && (width - 8) * 0.42 >= 140) {
+        CGFloat innerH = scrollH - top - 6;
+        if (innerH < 100) innerH = 100;
+        qrSide = MIN(innerH, width * 0.58);
+        CGFloat rw = width - qrSide - 8;
+        self.alpIV.frame = CGRectMake(left, top, qrSide, qrSide);
+        CGFloat rx = left + qrSide + 8;
+        CGFloat y = top;
+        self.alpTitle.frame = CGRectMake(rx, y, rw, 22);
+        y += 24;
+        self.alpInfo.frame = CGRectMake(rx, y, rw, 46);
+        y += 50;
+        self.alpSeg.frame = CGRectMake(rx, y, rw, 30);
+        y += 36;
+        CGFloat btnH = 36;
+        CGFloat gap = 6;
+        self.alpShare.frame = CGRectMake(rx, y, rw, btnH);
+        y += btnH + gap;
+        self.alpCopy.frame = CGRectMake(rx, y, rw, btnH);
+        y += btnH + gap;
+        self.alpSave.frame = CGRectMake(rx, y, rw, btnH);
+        y += btnH + 8;
+        CGFloat contentH = MAX(top + qrSide + 8, y);
+        self.alpScroll.contentSize = CGSizeMake(CGRectGetWidth(b), MAX(contentH, scrollH));
+        self.alpTitle.text = @"支付宝授权 · 扫左边的码";
+    } else {
+        CGFloat y = top;
+        self.alpTitle.frame = CGRectMake(left, y, width, 24);
+        y += 28;
+        self.alpInfo.frame = CGRectMake(left, y, width, 48);
+        y += 54;
+        self.alpSeg.frame = CGRectMake(left, y, width, 32);
+        y += 40;
+        CGFloat btnH = 42;
+        CGFloat gap = 8;
+        CGFloat buttons = btnH * 3 + gap * 2;
+        CGFloat room = scrollH - y - buttons - 8;
+        if (room >= 150) {
+            qrSide = MIN(width, room);
+        } else {
+            qrSide = MIN(width, 240);
+        }
+        self.alpIV.frame = CGRectMake(left + (width - qrSide) / 2.0, y, qrSide, qrSide);
+        y += qrSide + 8;
+        self.alpShare.frame = CGRectMake(left, y, width, btnH);
+        y += btnH + gap;
+        self.alpCopy.frame = CGRectMake(left, y, width, btnH);
+        y += btnH + gap;
+        self.alpSave.frame = CGRectMake(left, y, width, btnH);
+        y += btnH;
+        self.alpScroll.contentSize = CGSizeMake(CGRectGetWidth(b), MAX(y, scrollH));
+        self.alpTitle.text = @"支付宝授权 · 扫中间的码";
+    }
+
+    if (fabs(qrSide - self.alpLaidSide) > 1.0 || !self.alpIV.image) {
+        self.alpLaidSide = qrSide;
+        self.alpSide = qrSide;
+        NSInteger idx = self.alpSeg.selectedSegmentIndex;
+        if (idx < 0) idx = 0;
+        [self render:idx];
+    }
+    self.alpLayingOut = NO;
 }
 
 - (void)segTapped:(UISegmentedControl *)seg {
@@ -99,12 +288,6 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
     av.popoverPresentationController.sourceRect = sender.bounds;
     [[ProbeLogger shared] log:@"[二维码] 分享当前链接（%lu 字符）", (unsigned long)u.length];
     [self presentViewController:av animated:YES completion:nil];
-}
-
-- (void)viewDidAppear:(BOOL)animated {
-    [super viewDidAppear:animated];
-    [self.alpSeg addTarget:self action:@selector(segTapped:)
-         forControlEvents:UIControlEventValueChanged];
 }
 
 - (void)saveTapped {
@@ -280,14 +463,15 @@ static NSString *ALPEncodeURLComponent(NSString *s) {
 - (void)showCandidatesForAuthInfo:(NSString *)authInfoStr {
     [[ProbeLogger shared] log:@"[支付宝] 按 SDK 15.8.40 拼授权链接"];
 
-    // 实机扫 mclient/home/exterfaceAssign.htm 会进支付收银台并显示「系统异常，请联系商家」。
-    // 二进制里那条路径只出现在 fetchOrderInfoFromH5PayUrl:（拦支付链接），不在 auth_V2 里。
+    // 实机扫裸的 alipayauth:// 会被支付宝当成普通文本，提示「该内容非支付宝提供」。
+    // 默认改用 SDK 原文模板 https://render.alipay.com/p/s/ulink/?scheme=%@ ，里面再套编码过的协议。
+    // 裸协议仍保留，但不是第 1 个。
+    // mclient/home/exterfaceAssign.htm 是支付收银台（fetchOrderInfoFromH5PayUrl:），扫了会「系统异常」，不放。
     // auth_V2 / APayRoute 用格式串 `%@%@&%@` 拼：
     //   alipayauth://platformapi/startapp?
     //   appId=20000122&approveType=005&scope=kuaijie&prodcutId=WAP_FAST_LOGIN
     //     （prodcutId 的拼写错误是 SDK 原文）
-    //   再加上百度返回的 authInfo。两个顺序都做成候选，因为变参是压栈传的。
-    // 唤起网页用的模板是原文 `https://render.alipay.com/p/s/ulink/?scheme=%@`。
+    //   再加上百度返回的 authInfo。两个顺序都做成 ulink 候选，因为变参是压栈传的。
     // 签名值只编码一次；套进 ulink 时整段 scheme 再编码一次（% → %25），解开后签名仍是单层编码。
     // 百度这条串的 scope 是 auth_user，不是 SDK 后缀里的 kuaijie。
     NSString *authQuery = ALPEncodeAuthQuery(authInfoStr);
@@ -297,6 +481,8 @@ static NSString *ALPEncodeURLComponent(NSString *s) {
     NSString *suffixFirst = [NSString stringWithFormat:@"%@%@&%@", scheme, suffix, authQuery];
     NSString *ulinkBody = [NSString stringWithFormat:@"https://render.alipay.com/p/s/ulink/?scheme=%@",
                            ALPEncodeURLComponent(bodyFirst)];
+    NSString *ulinkSuffix = [NSString stringWithFormat:@"https://render.alipay.com/p/s/ulink/?scheme=%@",
+                             ALPEncodeURLComponent(suffixFirst)];
     NSString *rest = [NSString stringWithFormat:@"https://mclient.alipay.com/service/rest.htm?%@", authQuery];
 
     NSMutableArray *items = [NSMutableArray array];
@@ -312,10 +498,9 @@ static NSString *ALPEncodeURLComponent(NSString *s) {
             [[ProbeLogger shared] log:@"[支付宝] 候选 %@ %@%@ %@（%lu 字符）",
                 seg, host, path, variant, (unsigned long)url.length];
         };
-    // 默认第 1 个：和当前能扫出来的收银台链接差不多长，二维码放得下。
-    addURL(@"协议", @"alipayauth://", @"platformapi/startapp", @"签名在前", bodyFirst);
     addURL(@"唤起", @"render.alipay.com", @"/p/s/ulink/", @"签名在前", ulinkBody);
-    addURL(@"换序", @"alipayauth://", @"platformapi/startapp", @"appId 在前", suffixFirst);
+    addURL(@"换序", @"render.alipay.com", @"/p/s/ulink/", @"appId 在前", ulinkSuffix);
+    addURL(@"协议", @"alipayauth://", @"platformapi/startapp", @"明文协议", bodyFirst);
     addURL(@"网关", @"mclient.alipay.com", @"/service/rest.htm", @"SDK 网关", rest);
 
     [self showQRPager:items];
@@ -337,123 +522,17 @@ static NSString *ALPEncodeURLComponent(NSString *s) {
             return;
         }
 
-        CGRect scr = UIScreen.mainScreen.bounds;
-        // 横屏：可用宽度变成 667pt（SE2），二维码能大一倍。
-        // 竖屏只有 375pt 时，866 字符的码一格只有 3.44 像素，扫不出来。
-        CGFloat W = MAX(scr.size.width, scr.size.height);
-        CGFloat H = MIN(scr.size.width, scr.size.height);
-
         QRPageVC *vc = [[QRPageVC alloc] init];
         vc.alpItems = items;
-        vc.alpSide = H - 16;              // 横屏时高度是短边
         vc.alpAuth = self;
-        vc.view.frame = CGRectMake(0, 0, W, H);
-        vc.view.backgroundColor = [UIColor whiteColor];
-
-        // 二维码放左边，控件放右边（横屏布局）
-        CGFloat qrSide = H - 12;
-        UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(6, 6, qrSide, qrSide)];
-        iv.contentMode = UIViewContentModeScaleAspectFit;
-        iv.backgroundColor = [UIColor whiteColor];
-        [vc.view addSubview:iv];
-
-        CGFloat rx = qrSide + 14;         // 右侧起点
-        CGFloat rw = W - rx - 8;
-
-        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(rx, 4, rw, 32)];
-        title.text = @"支付宝授权 · 扫左边的码";
-        title.numberOfLines = 1;
-        title.font = [UIFont boldSystemFontOfSize:14];
-        title.adjustsFontSizeToFitWidth = YES;
-        title.minimumScaleFactor = 0.7;
-        [vc.view addSubview:title];
-
-        UILabel *info = [[UILabel alloc] initWithFrame:CGRectMake(rx, 38, rw, 68)];
-        info.numberOfLines = 3;
-        info.font = [UIFont boldSystemFontOfSize:17];
-        info.textColor = [UIColor blackColor];
-        info.backgroundColor = [UIColor colorWithRed:1.0 green:0.95 blue:0.7 alpha:1.0];
-        info.adjustsFontSizeToFitWidth = YES;
-        info.minimumScaleFactor = 0.55;
-        [vc.view addSubview:info];
-
-        NSMutableArray *segTitles = [NSMutableArray array];
-        NSMutableArray *legendLines = [NSMutableArray array];
-        for (NSDictionary *it in items) {
-            NSString *segName = it[@"seg"] ?: @"?";
-            [segTitles addObject:segName];
-            [legendLines addObject:[NSString stringWithFormat:@"%@  %@ %@",
-                                    segName, it[@"host"] ?: @"", it[@"variant"] ?: @""]];
-        }
-        UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:segTitles];
-        seg.frame = CGRectMake(rx, 110, rw, 30);
-        seg.selectedSegmentIndex = 0;
-        seg.apportionsSegmentWidthsByContent = YES;
-        [vc.view addSubview:seg];
-
-        CGFloat btnH = 30;
-        CGFloat btnGap = 4;
-        CGFloat stackTop = H - 8 - (btnH * 4 + btnGap * 3);
-        UILabel *legend = [[UILabel alloc] initWithFrame:CGRectMake(rx, 142, rw, MAX(0, stackTop - 146))];
-        legend.numberOfLines = 0;
-        legend.font = [UIFont systemFontOfSize:11];
-        legend.textColor = [UIColor grayColor];
-        legend.text = [legendLines componentsJoinedByString:@"\n"];
-        [vc.view addSubview:legend];
-
-        UIButton *share = [UIButton buttonWithType:UIButtonTypeSystem];
-        share.frame = CGRectMake(rx, stackTop, rw, btnH);
-        share.backgroundColor = [UIColor colorWithRed:0.95 green:0.45 blue:0.1 alpha:1.0];
-        share.layer.cornerRadius = 8;
-        share.titleLabel.font = [UIFont boldSystemFontOfSize:14];
-        share.titleLabel.adjustsFontSizeToFitWidth = YES;
-        share.titleLabel.minimumScaleFactor = 0.6;
-        [share setTitle:@"分享当前链接" forState:UIControlStateNormal];
-        [share setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        [share addTarget:vc action:@selector(shareTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [vc.view addSubview:share];
-
-        UIButton *copy = [UIButton buttonWithType:UIButtonTypeSystem];
-        copy.frame = CGRectMake(rx, stackTop + (btnH + btnGap), rw, btnH);
-        copy.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1.0];
-        copy.layer.cornerRadius = 8;
-        copy.titleLabel.font = [UIFont boldSystemFontOfSize:14];
-        copy.titleLabel.adjustsFontSizeToFitWidth = YES;
-        copy.titleLabel.minimumScaleFactor = 0.6;
-        [copy setTitle:@"复制当前链接" forState:UIControlStateNormal];
-        [copy setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        [copy addTarget:vc action:@selector(copyLinkTapped) forControlEvents:UIControlEventTouchUpInside];
-        [vc.view addSubview:copy];
-
-        UIButton *save = [UIButton buttonWithType:UIButtonTypeSystem];
-        save.frame = CGRectMake(rx, stackTop + (btnH + btnGap) * 2, rw, btnH);
-        save.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:0.35 alpha:1.0];
-        save.layer.cornerRadius = 8;
-        [save setTitle:@"存到相册" forState:UIControlStateNormal];
-        [save setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        [save addTarget:vc action:@selector(saveTapped) forControlEvents:UIControlEventTouchUpInside];
-        [vc.view addSubview:save];
-
-        UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-        close.frame = CGRectMake(rx, stackTop + (btnH + btnGap) * 3, rw, btnH);
-        close.backgroundColor = [UIColor colorWithRed:0.1 green:0.55 blue:0.9 alpha:1.0];
-        close.layer.cornerRadius = 8;
-        [close setTitle:@"关闭" forState:UIControlStateNormal];
-        [close setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        [close addTarget:vc action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-        [vc.view addSubview:close];
-
-        vc.alpSeg = seg;
-        vc.alpIV = iv;
-        vc.alpInfo = info;
-        [vc render:0];
-
-        self.qrPage = vc;
         vc.modalPresentationStyle = UIModalPresentationFullScreen;
-        [[ProbeLogger shared] log:@"[二维码] 准备弹横屏页 top=%@", NSStringFromClass([top class])];
+        vc.modalPresentationCapturesStatusBarAppearance = YES;
+        self.qrPage = vc;
+        [[ProbeLogger shared] log:@"[二维码] 准备弹出 top=%@（%lu 个候选，默认唤起）",
+            NSStringFromClass([top class]), (unsigned long)items.count];
         [top presentViewController:vc animated:YES completion:^{
-            [[ProbeLogger shared] log:@"[二维码] 已显示（横屏 %.0fx%.0f，二维码 %.0f pt，%lu 个候选）",
-                W, H, qrSide, (unsigned long)items.count];
+            [[ProbeLogger shared] log:@"[二维码] 已显示（%.0fx%.0f）",
+                vc.view.bounds.size.width, vc.view.bounds.size.height];
         }];
     });
 }
