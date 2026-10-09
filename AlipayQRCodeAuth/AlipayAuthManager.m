@@ -56,7 +56,6 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
     UIImage *qr = [ALPQRCode imageWithText:u side:self.alpSide quiet:4];
     self.alpIV.image = qr;
     if (qr) {
-        NSInteger mods = (NSInteger)(qr.size.width / MAX(1.0, floor(self.alpSide / (CGFloat)((NSInteger)qr.size.width))));
         [[ProbeLogger shared] log:@"[二维码] 候选 %ld：%lu 字符，图 %.0fx%.0f",
             (long)idx + 1, (unsigned long)u.length, qr.size.width, qr.size.height];
         self.alpInfo.text = [NSString stringWithFormat:@"第 %ld 个 · %lu 字符\n图 %.0fx%.0f 像素",
@@ -66,7 +65,6 @@ static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
         self.alpInfo.text = @"生成失败";
         [[ProbeLogger shared] log:@"[二维码] 候选 %ld 生成失败", (long)idx + 1];
     }
-    (void)mods;
 }
 
 - (void)segTapped:(UISegmentedControl *)seg {
