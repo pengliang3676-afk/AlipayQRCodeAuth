@@ -94,6 +94,16 @@ static const int kAlignCount[41] = {
     0,0,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,5,5,5,5,5,5,6,6,6,6,6,6,7
 };
 
+// ★ 版本信息（18 位）：v>=7 必须写在左下角 3x6 和右上角 6x3
+// 缺了它，v7 及以上的二维码整个扫不出来（v1-v6 不需要）
+static const int kVerInfo[41] = {
+    0, 0, 0, 0, 0, 0, 0, 0x07C94, 0x085BC, 0x09A99, 0x0A4D3, 0x0BBF6, 0x0C762, 0x0D847,
+    0x0E60D, 0x0F928, 0x10B78, 0x1145D, 0x12A17, 0x13532, 0x149A6, 0x15683, 0x168C9,
+    0x177EC, 0x18EC4, 0x191E1, 0x1AFAB, 0x1B08E, 0x1CC1A, 0x1D33F, 0x1ED75, 0x1F250,
+    0x209D5, 0x216F0, 0x228BA, 0x2379F, 0x24B0B, 0x2542E, 0x26A64, 0x27541, 0x28C69,
+};
+
+
 #define QRNAX 177
 
 typedef struct {
@@ -164,6 +174,16 @@ static void buildFunction(QRMat *m) {
     }
     m->fn[size - 8][8] = 1;
     m->mod[size - 8][8] = 1;
+
+    // ★ v>=7 预留版本信息区：左下角 3x6、右上角 6x3
+    if (m->ver >= 7) {
+        for (int i = 0; i < 6; i++) {
+            for (int j = 0; j < 3; j++) {
+                if (!m->fn[size - 11 + j][i]) { m->fn[size - 11 + j][i] = 1; m->mod[size - 11 + j][i] = 0; }
+                if (!m->fn[i][size - 11 + j]) { m->fn[i][size - 11 + j] = 1; m->mod[i][size - 11 + j] = 0; }
+            }
+        }
+    }
 }
 
 /// 数据位按上下蛇形填入 m->data
@@ -234,6 +254,17 @@ static void applyMask(QRMat *m, int mask) {
     for (int i = 0; i < 8; i++)  m->mod[size - 1 - i][8] = (bv >> (14 - i)) & 1;
     for (int i = 8; i < 15; i++) m->mod[8][size - 15 + i] = (bv >> (14 - i)) & 1;
     m->mod[size - 8][8] = 1;
+
+    // ★ v>=7 写版本信息（18 位，低位在前）
+    if (m->ver >= 7) {
+        int vb = kVerInfo[m->ver];
+        for (int k = 0; k < 18; k++) {
+            int bit = (vb >> k) & 1;
+            int ii = k / 3, jj = k % 3;
+            m->mod[size - 11 + jj][ii] = bit;
+            m->mod[ii][size - 11 + jj] = bit;
+        }
+    }
 }
 
 /// 自检：从矩阵反解数据位，返回原始码字。用于确认这个掩模能用。
@@ -323,22 +354,32 @@ static long deinterleave(const uint8_t *cw, long cwLen, int ver, uint8_t *outDat
 @implementation ALPQRCode
 
 + (NSArray<NSArray<NSNumber *> *> *)matrixWithText:(NSString *)text {
+    // 选起始版本
+    int startVer = 0;
+    for (int v = 1; v <= 40; v++) {
+        int cap = kVerL[v].data * 8;
+        int overhead = 4 + (v < 10 ? 8 : 16);
+        if (n * 8 + overhead <= cap) { startVer = v; break; }
+    }
+    if (startVer == 0) return nil;
+
+    // ★ 逐个版本尝试：自检不过就升一个版本重来，
+    //   保证出去的二维码一定是可读的（宁可大一点）
+    for (int tryVer = startVer; tryVer <= 40; tryVer++) {
+        NSArray *r = [self matrixWithText:text version:tryVer];
+        if (r) return r;
+    }
+    return nil;
+}
+
++ (NSArray<NSArray<NSNumber *> *> *)matrixWithText:(NSString *)text version:(int)ver {
     GFInit();
     if (!text.length) return nil;
-
     NSData *data = [text dataUsingEncoding:NSISOLatin1StringEncoding];
     if (!data) data = [text dataUsingEncoding:NSUTF8StringEncoding];
     const uint8_t *src = data.bytes;
     int n = (int)data.length;
-
-    // 选版本
-    int ver = 0;
-    for (int v = 1; v <= 40; v++) {
-        int cap = kVerL[v].data * 8;
-        int overhead = 4 + (v < 10 ? 8 : 16);
-        if (n * 8 + overhead <= cap) { ver = v; break; }
-    }
-    if (ver == 0) return nil;
+    if (ver < 1 || ver > 40) return nil;
     const QRVerInfo *vi = &kVerL[ver];
 
     // 数据位流
@@ -453,8 +494,10 @@ static long deinterleave(const uint8_t *cw, long cwLen, int ver, uint8_t *outDat
     free(ibit);
 
     if (chosen < 0) {
-        // 8 个都不行（不该发生）—— 退而用掩模 0，至少结构是合法的
-        applyMask(&m, 0);
+        // 8 个掩模自检都不过 —— 返回 nil，让上层升版本重试
+        free(inter);
+        free(ibit);
+        return nil;
     }
 
     NSMutableArray *out = [NSMutableArray arrayWithCapacity:m.size];

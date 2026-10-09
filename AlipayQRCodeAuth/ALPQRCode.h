@@ -17,4 +17,7 @@
 /// 只算模块矩阵（NSNumber 0/1 的二维数组），调试用
 + (NSArray<NSArray<NSNumber *> *> *)matrixWithText:(NSString *)text;
 
+/// 指定版本生成（失败返回 nil）
++ (NSArray<NSArray<NSNumber *> *> *)matrixWithText:(NSString *)text version:(int)ver;
+
 @end
