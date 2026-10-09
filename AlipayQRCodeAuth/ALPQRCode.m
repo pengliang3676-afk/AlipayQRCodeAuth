@@ -55,8 +55,10 @@ static void RSEcc(const uint8_t *data, int len, int degree, uint8_t *ecc) {
         uint8_t factor = data[i] ^ rem[0];
         if (degree > 1) memmove(rem, rem + 1, degree - 1);
         rem[degree - 1] = 0;
+        /* gen[] is low-degree first; the remainder step needs the
+           coefficients below the leading 1, highest power first. */
         for (int j = 0; j < degree; j++) {
-            rem[j] ^= GFMul(gen[j + 1], factor);
+            rem[j] ^= GFMul(gen[degree - 1 - j], factor);
         }
     }
     memcpy(ecc, rem, degree);
@@ -72,7 +74,7 @@ static const QRVerInfo kVerL[41] = {
     {172,136,18,2},{196,156,20,2},{242,194,24,2},{292,232,30,2},{346,274,18,4},
     {404,324,20,4},{466,370,24,4},{532,428,26,4},{581,461,30,4},{655,523,22,6},
     {733,589,24,6},{815,647,28,6},{901,721,30,6},{991,795,28,7},{1085,861,28,8},
-    {1156,932,28,8},{1258,1006,30,9},{1364,1094,30,9},{1474,1174,30,10},{1588,1276,26,12},
+    {1156,932,28,8},{1258,1006,28,9},{1364,1094,30,9},{1474,1174,30,10},{1588,1276,26,12},
     {1706,1370,28,12},{1828,1468,30,12},{1921,1531,30,13},{2051,1631,30,14},{2185,1735,30,15},
     {2323,1843,30,16},{2465,1955,30,17},{2611,2071,30,18},{2761,2191,30,19},{2876,2306,30,19},
     {3034,2434,30,20},{3196,2566,30,21},{3362,2702,30,22},{3532,2812,30,24},{3706,2956,30,25},
@@ -90,9 +92,12 @@ static const int kAlign[41][8] = {
     {6,30,54,78,102,126,150},{6,24,50,76,102,128,154},{6,28,54,80,106,132,158},
     {6,32,58,84,110,136,162},{6,26,54,82,110,138,166},{6,30,58,86,114,142,170},
 };
-static const int kAlignCount[41] = {
-    0,0,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,4,4,4,4,4,4,4,4,5,5,5,5,5,5,6,6,6,6,6,6,7
-};
+static int alignCount(int ver) {
+    int n = 0;
+    /* Centers are never 0; unused slots in kAlign[ver] stay 0. */
+    while (n < 8 && kAlign[ver][n] != 0) n++;
+    return n;
+}
 
 // ★ 版本信息（18 位）：v>=7 必须写在左下角 3x6 和右上角 6x3
 // 缺了它，v7 及以上的二维码整个扫不出来（v1-v6 不需要）
@@ -141,7 +146,7 @@ static void buildFunction(QRMat *m) {
     }
 
     // 对齐图案
-    int n = kAlignCount[m->ver];
+    int n = alignCount(m->ver);
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
             int r = kAlign[m->ver][i], c = kAlign[m->ver][j];
@@ -253,6 +258,8 @@ static void applyMask(QRMat *m, int mask) {
     for (int i = 9; i < 15; i++) m->mod[14 - i][8] = (bv >> (14 - i)) & 1;
     for (int i = 0; i < 8; i++)  m->mod[size - 1 - i][8] = (bv >> (14 - i)) & 1;
     for (int i = 8; i < 15; i++) m->mod[8][size - 15 + i] = (bv >> (14 - i)) & 1;
+    /* Format bit 7 (0 = LSB) is the module just left of that run. */
+    m->mod[8][size - 8] = (bv >> 7) & 1;
     m->mod[size - 8][8] = 1;
 
     // ★ v>=7 写版本信息（18 位，低位在前）
@@ -280,7 +287,8 @@ static BOOL readBack(QRMat *m, uint8_t *outCw, long maxCw, long *outLen) {
     int val = 0;
     for (int i = 0; i < 15; i++) val = (val << 1) | got[i];
     val ^= 0x5412;
-    int mask = val & 7;
+    /* Mask id is bits 12..10 of the format word, not the BCH remainder. */
+    int mask = (val >> 10) & 7;
 
     long idx = 0;
     uint8_t bits[QRNAX * QRNAX];
