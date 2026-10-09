@@ -16,6 +16,24 @@
 @property (nonatomic, copy) void (^finalCompletion)(BOOL, NSString *);
 @end
 
+// 二维码生成：包一层自己写的编码器（纯 CoreGraphics，不碰 CoreImage）
+// 崩溃日志证实 CIContext contextWithOptions: 在本机会 SIGSEGV，所以不能用 CIQRCodeGenerator。
+static UIImage *ALPMakeQR(NSString *text, CGFloat side) {
+    if (!text.length) {
+        [[ProbeLogger shared] log:@"[二维码] 内容为空"];
+        return nil;
+    }
+    UIImage *img = [ALPQRCode imageWithText:text side:side quiet:4];
+    if (!img) {
+        [[ProbeLogger shared] log:@"[二维码] 生成失败（内容 %lu 字符）",
+            (unsigned long)text.length];
+    } else {
+        [[ProbeLogger shared] log:@"[二维码] 生成成功 %.0fx%.0f（内容 %lu 字符）",
+            img.size.width, img.size.height, (unsigned long)text.length];
+    }
+    return img;
+}
+
 @implementation AlipayAuthManager
 
 #pragma mark - 取最上层控制器（传统 window 取法）
@@ -194,7 +212,7 @@
         void (^render)(NSInteger) = ^(NSInteger idx) {
             if (idx < 0 || idx >= (NSInteger)items.count) return;
             NSString *u = items[idx][@"u"];
-            UIImage *qr = [self qrImageFor:u side:side];
+            UIImage *qr = ALPMakeQR(u, side);
             weakIv.image = qr;
             NSInteger n = (NSInteger)side;
             weakInfo.text = qr
@@ -234,7 +252,7 @@
     NSInteger idx = seg.selectedSegmentIndex;
     if (idx < 0 || idx >= (NSInteger)self.qrItems.count) return;
     NSString *u = self.qrItems[idx][@"u"];
-    UIImage *qr = [self qrImageFor:u side:self.qrSide];
+    UIImage *qr = ALPMakeQR(u, self.qrSide);
     self.qrImageView.image = qr;
     self.qrInfoLabel.text = qr
         ? [NSString stringWithFormat:@"%lu 字符 · %ldx%ld 像素",
