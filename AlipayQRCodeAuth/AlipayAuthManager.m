@@ -80,32 +80,20 @@
 - (void)showCandidatesForAuthInfo:(NSString *)authInfoStr {
     [[ProbeLogger shared] log:@"[支付宝] 不调 SDK，直接拼候选链接出二维码"];
 
-    NSString *enc = [authInfoStr stringByAddingPercentEncodingWithAllowedCharacters:
-                     [NSCharacterSet URLQueryAllowedCharacterSet]];
-
-    // 候选 1：alipays://platformapi/startapp?appId=20000001&<authInfoStr>
-    NSString *c1 = [NSString stringWithFormat:
-        @"alipays://platformapi/startapp?appId=20000001&%@", authInfoStr];
-
-    // 候选 2：ulink 包候选 1
-    NSString *enc1 = [c1 stringByAddingPercentEncodingWithAllowedCharacters:
-                      [NSCharacterSet URLQueryAllowedCharacterSet]];
-    NSString *c2 = [NSString stringWithFormat:
-        @"https://render.alipay.com/p/s/i?scheme=%@", enc1];
-
-    // 候选 3：老版 WAP 收银台（网页版授权，天生支持跨设备扫码）
-    NSString *c3 = [NSString stringWithFormat:
+    // ★ 实测结论（用手机B 支付宝逐个扫的结果）：
+    //   A https://openauth.alipay.com/oauth2/publicAppAuthorize.htm  -> E004 回调地址没报备
+    //   B https://wappaygw.alipay.com/home/exterfaceAssign.htm?<参数> -> 出「支付宝授权」页面
+    //   C https://mclient.alipay.com/home/exterfaceAssign.htm?<参数>  -> 出「支付宝授权」页面
+    //   D render.alipay.com/p/s/i?scheme=alipays://...               -> 滴滴两声回首页（不执行）
+    // 所以只保留 B / C —— 它们是支付宝的网页收银台，真能进授权页。
+    NSString *cB = [NSString stringWithFormat:
         @"https://wappaygw.alipay.com/home/exterfaceAssign.htm?%@", authInfoStr];
-
-    // 候选 4：mclient WAP 收银台
-    NSString *c4 = [NSString stringWithFormat:
+    NSString *cC = [NSString stringWithFormat:
         @"https://mclient.alipay.com/home/exterfaceAssign.htm?%@", authInfoStr];
 
     NSArray *items = @[
-        @{@"t": @"① alipays:// + appId20000001", @"u": c1},
-        @{@"t": @"② ulink 包 ①", @"u": c2},
-        @{@"t": @"③ wappaygw 网页收银台", @"u": c3},
-        @{@"t": @"④ mclient 网页收银台", @"u": c4},
+        @{@"t": @"① wappaygw 网页收银台（先试这个）", @"u": cB},
+        @{@"t": @"② mclient 网页收银台", @"u": cC},
     ];
     (void)enc;
 
@@ -143,14 +131,14 @@
         CGFloat y = 46;
 
         UILabel *t1 = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 26)];
-        t1.text = @"支付宝授权 · 四种候选";
+        t1.text = @"支付宝授权 · 两种候选";
         t1.font = [UIFont boldSystemFontOfSize:18];
         t1.textAlignment = NSTextAlignmentCenter;
         [sv addSubview:t1];
         y += 30;
 
         UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 34)];
-        tip.text = @"用另一台手机的支付宝从 ① 开始往下试，哪个有反应告诉我编号";
+        tip.text = @"用另一台手机的支付宝从 ① 开始试";
         tip.font = [UIFont systemFontOfSize:12];
         tip.textColor = [UIColor darkGrayColor];
         tip.numberOfLines = 0;
