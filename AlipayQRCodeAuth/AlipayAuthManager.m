@@ -115,9 +115,21 @@
 #pragma mark - 二维码显示（唤起式授权）
 
 - (UIImage *)qrImageFor:(NSString *)text side:(CGFloat)side {
+    if (!text.length) {
+        [[ProbeLogger shared] log:@"[二维码] 内容为空"];
+        return nil;
+    }
     NSData *d = [text dataUsingEncoding:NSUTF8StringEncoding];
-    CIFilter *f = [CIFilter filterWithName:@"CIQRCodeGenerator"];
-    if (!f) return nil;
+    Class filtCls = NSClassFromString(@"CIFilter");
+    if (!filtCls) {
+        [[ProbeLogger shared] log:@"[二维码] CIFilter 类不存在（CoreImage 没链接）"];
+        return nil;
+    }
+    CIFilter *f = [filtCls filterWithName:@"CIQRCodeGenerator"];
+    if (!f) {
+        [[ProbeLogger shared] log:@"[二维码] CIQRCodeGenerator 滤镜取不到（CoreImage 没链接）"];
+        return nil;
+    }
     [f setValue:d forKey:@"inputMessage"];
     [f setValue:@"L" forKey:@"inputCorrectionLevel"];
     CIImage *out = f.outputImage;
@@ -190,6 +202,14 @@
                 iv.frame = CGRectMake(20, y, side, side);
                 [sv addSubview:iv];
                 y += side + 6;
+            } else {
+                UILabel *er = [[UILabel alloc] initWithFrame:CGRectMake(20, y, side, 80)];
+                er.text = @"二维码生成失败";
+                er.numberOfLines = 0;
+                er.textAlignment = NSTextAlignmentCenter;
+                er.textColor = [UIColor redColor];
+                [sv addSubview:er];
+                y += 88;
             }
             UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 18)];
             m.text = [NSString stringWithFormat:@"%lu 字符", (unsigned long)[it[@"u"] length]];
