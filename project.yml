@@ -9,8 +9,8 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "2.2.3"
-    CURRENT_PROJECT_VERSION: "223"
+    MARKETING_VERSION: "2.2.4"
+    CURRENT_PROJECT_VERSION: "224"
     SWIFT_VERSION: "5.0"
     CODE_SIGNING_ALLOWED: NO
     CODE_SIGNING_REQUIRED: NO
@@ -45,8 +45,8 @@ targets:
       path: AlipayQRCodeAuth/Info.plist
       properties:
         CFBundleDisplayName: 支付宝授权
-        CFBundleShortVersionString: "2.2.3"
-        CFBundleVersion: "223"
+        CFBundleShortVersionString: "2.2.4"
+        CFBundleVersion: "224"
         CFBundlePackageType: APPL
         CFBundleSignature: "????"
         LSRequiresIPhoneOS: true
@@ -56,6 +56,8 @@ targets:
           - armv7
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -77,6 +79,7 @@ targets:
           - baiduboxapp
           - baiduboxlite
           - baidunetdisk
+        NSPhotoLibraryAddUsageDescription: 保存二维码图片，方便在电脑上放大显示
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsArbitraryLoadsInWebContent: true
