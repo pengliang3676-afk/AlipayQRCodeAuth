@@ -43,7 +43,20 @@
     title.text = @"支付宝授权侦查";
     title.textColor = [UIColor greenColor];
     title.font = [UIFont boldSystemFontOfSize:15];
+    title.adjustsFontSizeToFitWidth = YES;
+    title.minimumScaleFactor = 0.7;
     [bar addSubview:title];
+
+    UIButton *shareBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    shareBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [shareBtn setTitle:@"分享" forState:UIControlStateNormal];
+    [shareBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    shareBtn.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    shareBtn.backgroundColor = [UIColor colorWithRed:0.95 green:0.45 blue:0.1 alpha:1.0];
+    shareBtn.layer.cornerRadius = 8;
+    shareBtn.clipsToBounds = YES;
+    [shareBtn addTarget:self action:@selector(shareAll:) forControlEvents:UIControlEventTouchUpInside];
+    [bar addSubview:shareBtn];
 
     UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     copyBtn.translatesAutoresizingMaskIntoConstraints = NO;
@@ -111,15 +124,22 @@
         [bar.topAnchor constraintEqualToAnchor:guide.topAnchor],
         [bar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [bar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [bar.heightAnchor constraintEqualToConstant:40],
+        [bar.heightAnchor constraintEqualToConstant:78],
 
         [title.leadingAnchor constraintEqualToAnchor:bar.leadingAnchor constant:12],
-        [title.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [title.topAnchor constraintEqualToAnchor:bar.topAnchor constant:6],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:bar.trailingAnchor constant:-12],
 
-        [clearBtn.trailingAnchor constraintEqualToAnchor:bar.trailingAnchor constant:-12],
-        [clearBtn.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
-        [copyBtn.trailingAnchor constraintEqualToAnchor:clearBtn.leadingAnchor constant:-18],
-        [copyBtn.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [shareBtn.leadingAnchor constraintEqualToAnchor:bar.leadingAnchor constant:12],
+        [shareBtn.bottomAnchor constraintEqualToAnchor:bar.bottomAnchor constant:-8],
+        [shareBtn.widthAnchor constraintEqualToConstant:88],
+        [shareBtn.heightAnchor constraintEqualToConstant:34],
+
+        [copyBtn.leadingAnchor constraintEqualToAnchor:shareBtn.trailingAnchor constant:14],
+        [copyBtn.centerYAnchor constraintEqualToAnchor:shareBtn.centerYAnchor],
+
+        [clearBtn.leadingAnchor constraintEqualToAnchor:copyBtn.trailingAnchor constant:14],
+        [clearBtn.centerYAnchor constraintEqualToAnchor:shareBtn.centerYAnchor],
 
         [status.topAnchor constraintEqualToAnchor:bar.bottomAnchor constant:14],
         [status.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
@@ -142,12 +162,26 @@
     ]];
 }
 
+- (NSString *)fullLogText {
+    NSString *fromLogger = [[ProbeLogger shared] allText] ?: @"";
+    NSString *fromView = self.logView.text ?: @"";
+    return fromLogger.length >= fromView.length ? fromLogger : fromView;
+}
+
 - (void)bindLogger {
+    self.logView.text = [[ProbeLogger shared] allText] ?: @"";
     __weak typeof(self) weakSelf = self;
-    [ProbeLogger shared].onAppend = ^(NSString *line) {
+    [ProbeLogger shared].onReload = ^(NSString *allText) {
         __strong typeof(weakSelf) self = weakSelf;
-        NSString *cur = self.logView.text ?: @"";
-        self.logView.text = [cur stringByAppendingString:line];
+        self.logView.text = allText ?: @"";
+        if (self.logView.text.length) {
+            [self.logView scrollRangeToVisible:NSMakeRange(0, 1)];
+        }
+    };
+    [ProbeLogger shared].onAppend = ^(NSString *line) {
+        (void)line;
+        __strong typeof(weakSelf) self = weakSelf;
+        self.logView.text = [[ProbeLogger shared] allText] ?: @"";
         if (self.logView.text.length) {
             [self.logView scrollRangeToVisible:NSMakeRange(self.logView.text.length - 1, 1)];
         }
@@ -204,7 +238,14 @@
 #pragma mark - 外部 URL
 
 - (void)handleOpenURL:(NSURL *)url {
-    [[ProbeLogger shared] log:@"[App] handleOpenURL: %@", url.absoluteString];
+    NSString *full = url.absoluteString ?: @"";
+    [[ProbeLogger shared] noteIncomingURL:full];
+    [[ProbeLogger shared] log:@"[App] handleOpenURL 完整 URL（%lu 字符）:\n%@",
+        (unsigned long)full.length, full];
+    self.statusLabel.text = full.length
+        ? [NSString stringWithFormat:@"收到入站链接（%lu 字符）。点橙色「分享」把整段日志发到另一台手机。",
+           (unsigned long)full.length]
+        : @"收到空链接";
     [[AlipayAuthManager shared] handleStandbyURL:url];
 }
 
@@ -264,8 +305,19 @@
 #pragma mark - 按钮
 
 - (void)copyAll {
-    [UIPasteboard generalPasteboard].string = self.logView.text ?: @"";
+    [UIPasteboard generalPasteboard].string = [self fullLogText];
     [self flashTitle:@"已复制"];
+}
+
+- (void)shareAll:(UIButton *)sender {
+    NSString *text = [self fullLogText];
+    if (!text.length) { [self flashTitle:@"没有日志"]; return; }
+    UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:@[text]
+                                                                     applicationActivities:nil];
+    av.popoverPresentationController.sourceView = sender;
+    av.popoverPresentationController.sourceRect = sender.bounds;
+    [[ProbeLogger shared] log:@"[日志] 分享全部（%lu 字符）", (unsigned long)text.length];
+    [self presentViewController:av animated:YES completion:nil];
 }
 
 - (void)clearAll {

@@ -16,8 +16,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 实时把新增日志回调给 UI
 @property (nonatomic, copy, nullable) void (^onAppend)(NSString *line);
+/// 整段日志被重排后回调（例如把入站 URL 插到最前面）
+@property (nonatomic, copy, nullable) void (^onReload)(NSString *allText);
 
 - (void)log:(NSString *)format, ... NS_FORMAT_FUNCTION(1,2);
+/// 把完整 URL 插到日志最前面，分享/复制时第一眼就能看到。同一条不重复插入。
+- (void)noteIncomingURL:(NSString *)absoluteString;
 - (void)logData:(NSString *)title data:(NSData *)data;
 - (NSString *)allText;
 - (void)clear;
