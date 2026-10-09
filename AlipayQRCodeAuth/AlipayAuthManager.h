@@ -14,6 +14,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 二维码页面（唤起式授权时显示）
 @property (nonatomic, strong, nullable) UIViewController *qrPage;
+@property (nonatomic, strong, nullable) UISegmentedControl *qrSeg;
+@property (nonatomic, strong, nullable) NSArray *qrItems;
+@property (nonatomic, strong, nullable) UIImageView *qrImageView;
+@property (nonatomic, strong, nullable) UILabel *qrInfoLabel;
+@property (nonatomic, assign) CGFloat qrSide;
 
 /// 完整流程：cmd=3016 → 支付宝 SDK authV2（可能弹 H5 收银台）→ cmd=3015 → activity.update
 /// @param bduss 百度扫码登录拿到的 BDUSS

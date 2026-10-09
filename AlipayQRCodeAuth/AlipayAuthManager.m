@@ -78,44 +78,49 @@
 #pragma mark - 第二步（新）：不调 SDK，直接把授权参数拼成支付宝链接出二维码
 
 - (void)showCandidatesForAuthInfo:(NSString *)authInfoStr {
-    [[ProbeLogger shared] log:@"[支付宝] 不调 SDK，直接拼候选链接出二维码"];
+    [[ProbeLogger shared] log:@"[支付宝] 拼网页收银台链接（全屏单码）"];
 
-    // ★ 实测结论（用手机B 支付宝逐个扫的结果）：
-    //   A https://openauth.alipay.com/oauth2/publicAppAuthorize.htm  -> E004 回调地址没报备
-    //   B https://wappaygw.alipay.com/home/exterfaceAssign.htm?<参数> -> 出「支付宝授权」页面
-    //   C https://mclient.alipay.com/home/exterfaceAssign.htm?<参数>  -> 出「支付宝授权」页面
-    //   D render.alipay.com/p/s/i?scheme=alipays://...               -> 滴滴两声回首页（不执行）
-    // 所以只保留 B / C —— 它们是支付宝的网页收银台，真能进授权页。
-    NSString *cB = [NSString stringWithFormat:
-        @"https://wappaygw.alipay.com/home/exterfaceAssign.htm?%@", authInfoStr];
-    NSString *cC = [NSString stringWithFormat:
-        @"https://mclient.alipay.com/home/exterfaceAssign.htm?%@", authInfoStr];
+    // 实测：wappaygw / mclient 这两个网页收银台能进支付宝授权页；
+    // openauth 报 E004（回调地址没报备），render ulink 被拒绝执行。
+    // 每个都出两个版本：带证书序列号 / 不带 —— 服务端校验口径不确定，都留着试。
+    NSMutableArray *items = [NSMutableArray array];
 
-    NSArray *items = @[
-        @{@"t": @"① wappaygw 网页收银台（先试这个）", @"u": cB},
-        @{@"t": @"② mclient 网页收银台", @"u": cC},
-    ];
+    NSString *base = authInfoStr;
+    // 去掉证书序列号（服务端可能不需要，能显著降低二维码密度）
+    NSMutableArray *keep = [NSMutableArray array];
+    for (NSString *kv in [authInfoStr componentsSeparatedByString:@"&"]) {
+        if ([kv hasPrefix:@"alipay_root_cert_sn="]) continue;
+        if ([kv hasPrefix:@"app_cert_sn="]) continue;
+        [keep addObject:kv];
+    }
+    NSString *shortForm = [keep componentsJoinedByString:@"&"];
 
+    void (^add)(NSString *, NSString *) = ^(NSString *tag, NSString *params) {
+        [items addObject:@{
+            @"t": [NSString stringWithFormat:@"%@（%lu 字符）", tag, (unsigned long)params.length],
+            @"u": [NSString stringWithFormat:
+                   @"https://wappaygw.alipay.com/home/exterfaceAssign.htm?%@", params]
+        }];
+    };
+    add(@"① wappaygw 全参数", base);
+    add(@"② wappaygw 去证书号", shortForm);
+    add(@"③ mclient 全参数", base);
+    add(@"④ mclient 去证书号", shortForm);
+
+    [self showQRPager:items];
+}
+
+#pragma mark - 全屏单码翻页
+
+- (void)showQRPager:(NSArray<NSDictionary *> *)items {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 已经在显示就别再弹（重复 present 会崩）
         if (self.qrPage && self.qrPage.presentingViewController) {
             [[ProbeLogger shared] log:@"[二维码] 已在显示中，跳过"];
             return;
         }
-        if (self.qrPage) {
-            [[ProbeLogger shared] log:@"[二维码] 清掉旧的 qrPage"];
-            self.qrPage = nil;
-        }
-        UIViewController *top = nil;
-        for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
-            if (![sc isKindOfClass:UIWindowScene.class]) continue;
-            for (UIWindow *w in ((UIWindowScene *)sc).windows) {
-                UIViewController *r = w.rootViewController;
-                while (r.presentedViewController) r = r.presentedViewController;
-                if (r) { top = r; break; }
-            }
-            if (top) break;
-        }
+        self.qrPage = nil;
+
+        UIViewController *top = [AlipayAuthManager topViewController];
         if (!top) {
             [[ProbeLogger shared] log:@"[二维码] 找不到 topViewController"];
             return;
@@ -123,82 +128,93 @@
 
         CGRect screen = UIScreen.mainScreen.bounds;
         CGFloat W = screen.size.width;
-        CGFloat side = W - 60;
+        CGFloat H = screen.size.height;
 
-        UIScrollView *sv = [[UIScrollView alloc] initWithFrame:screen];
-        sv.backgroundColor = [UIColor whiteColor];
-        CGFloat y = 46;
+        UIViewController *vc = [[UIViewController alloc] init];
+        vc.view.frame = screen;
+        vc.view.backgroundColor = [UIColor whiteColor];
 
-        UILabel *t1 = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 26)];
-        t1.text = @"支付宝授权 · 两种候选";
-        t1.font = [UIFont boldSystemFontOfSize:18];
-        t1.textAlignment = NSTextAlignmentCenter;
-        [sv addSubview:t1];
-        y += 30;
+        // 顶部标签
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(8, 4, W - 16, 22)];
+        title.text = @"支付宝授权 · 用另一台手机扫";
+        title.font = [UIFont boldSystemFontOfSize:14];
+        title.textAlignment = NSTextAlignmentCenter;
+        [vc.view addSubview:title];
 
-        UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 34)];
-        tip.text = @"用另一台手机的支付宝从 ① 开始试";
-        tip.font = [UIFont systemFontOfSize:12];
-        tip.textColor = [UIColor darkGrayColor];
-        tip.numberOfLines = 0;
-        tip.textAlignment = NSTextAlignmentCenter;
-        [sv addSubview:tip];
-        y += 40;
+        // 二维码尽量占满
+        CGFloat qrTop = 28;
+        CGFloat bottomBar = 96;
+        CGFloat side = MIN(W - 8, H - qrTop - bottomBar);
+        UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake((W - side) / 2.0, qrTop, side, side)];
+        iv.contentMode = UIViewContentModeScaleAspectFit;
+        [vc.view addSubview:iv];
 
-        for (NSDictionary *it in items) {
-            UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 20)];
-            lb.text = it[@"t"];
-            lb.font = [UIFont boldSystemFontOfSize:14];
-            [sv addSubview:lb];
-            y += 22;
+        UILabel *info = [[UILabel alloc] initWithFrame:CGRectMake(8, qrTop + side + 2, W - 16, 20)];
+        info.font = [UIFont systemFontOfSize:12];
+        info.textColor = [UIColor darkGrayColor];
+        info.textAlignment = NSTextAlignmentCenter;
+        [vc.view addSubview:info];
 
-            UIImage *qr = [self qrImageFor:it[@"u"] side:side];
-            if (qr) {
-                UIImageView *iv = [[UIImageView alloc] initWithImage:qr];
-                iv.frame = CGRectMake((W - side) / 2.0, y, side, side);
-                [sv addSubview:iv];
-                y += side + 4;
-            } else {
-                UILabel *er = [[UILabel alloc] initWithFrame:CGRectMake(20, y, side, 40)];
-                er.text = @"二维码生成失败";
-                er.textColor = [UIColor redColor];
-                er.textAlignment = NSTextAlignmentCenter;
-                [sv addSubview:er];
-                y += 46;
-            }
-            UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(12, y, W - 24, 16)];
-            m.text = [NSString stringWithFormat:@"%lu 字符", (unsigned long)[it[@"u"] length]];
-            m.font = [UIFont systemFontOfSize:11];
-            m.textColor = [UIColor grayColor];
-            m.textAlignment = NSTextAlignmentCenter;
-            [sv addSubview:m];
-            y += 26;
-        }
+        UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:
+            [items valueForKey:@"t"]];
+        seg.frame = CGRectMake(8, H - bottomBar + 16, W - 16, 32);
+        seg.selectedSegmentIndex = 0;
+        [vc.view addSubview:seg];
+
+        // 把选中的码画出来
+        __weak UISegmentedControl *weakSeg = seg;
+        __weak UIImageView *weakIv = iv;
+        __weak UILabel *weakInfo = info;
+        void (^render)(NSInteger) = ^(NSInteger idx) {
+            if (idx < 0 || idx >= (NSInteger)items.count) return;
+            NSString *u = items[idx][@"u"];
+            UIImage *qr = [self qrImageFor:u side:side];
+            weakIv.image = qr;
+            NSInteger n = (NSInteger)side;
+            weakInfo.text = qr
+                ? [NSString stringWithFormat:@"%lu 字符 · %ldx%ld 像素",
+                   (unsigned long)u.length, (long)n, (long)n]
+                : @"生成失败";
+        };
+        render(0);
+        [seg addTarget:self action:@selector(segChanged:) forControlEvents:UIControlEventValueChanged];
+        self.qrSeg = seg;
+        self.qrItems = items;
+        self.qrImageView = iv;
+        self.qrInfoLabel = info;
+        self.qrSide = side;
+        (void)weakSeg;
 
         UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-        close.frame = CGRectMake(12, y, W - 24, 46);
+        close.frame = CGRectMake(8, H - bottomBar + 54, W - 16, 40);
         close.backgroundColor = [UIColor colorWithRed:0.1 green:0.55 blue:0.9 alpha:1.0];
         close.layer.cornerRadius = 8;
         [close setTitle:@"关闭" forState:UIControlStateNormal];
         [close setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         [close addTarget:self action:@selector(dismissQR) forControlEvents:UIControlEventTouchUpInside];
-        [sv addSubview:close];
-        y += 60;
+        [vc.view addSubview:close];
 
-        sv.contentSize = CGSizeMake(W, y);
-
-        UIViewController *vc = [[UIViewController alloc] init];
-        vc.view.frame = screen;
-        vc.view.backgroundColor = [UIColor whiteColor];
-        [vc.view addSubview:sv];
         self.qrPage = vc;
         vc.modalPresentationStyle = UIModalPresentationFullScreen;
-
-        [[ProbeLogger shared] log:@"[二维码] 准备弹页，top=%@", NSStringFromClass([top class])];
+        [[ProbeLogger shared] log:@"[二维码] 准备弹页 top=%@", NSStringFromClass([top class])];
         [top presentViewController:vc animated:YES completion:^{
-            [[ProbeLogger shared] log:@"[二维码] 已显示四种候选"];
+            [[ProbeLogger shared] log:@"[二维码] 已显示，共 %lu 个候选，二维码边长 %.0f",
+                (unsigned long)items.count, side];
         }];
     });
+}
+
+- (void)segChanged:(UISegmentedControl *)seg {
+    NSInteger idx = seg.selectedSegmentIndex;
+    if (idx < 0 || idx >= (NSInteger)self.qrItems.count) return;
+    NSString *u = self.qrItems[idx][@"u"];
+    UIImage *qr = [self qrImageFor:u side:self.qrSide];
+    self.qrImageView.image = qr;
+    self.qrInfoLabel.text = qr
+        ? [NSString stringWithFormat:@"%lu 字符 · %ldx%ld 像素",
+           (unsigned long)u.length, (long)self.qrSide, (long)self.qrSide]
+        : @"生成失败";
+    [[ProbeLogger shared] log:@"[二维码] 切到 %ld：%lu 字符", (long)idx, (unsigned long)u.length];
 }
 
 #pragma mark - 第二步：支付宝 SDK authV2
