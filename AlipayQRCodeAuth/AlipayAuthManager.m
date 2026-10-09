@@ -578,7 +578,10 @@ static NSString *ALPUlink(NSString *schemeURL) {
 
 /// AppDelegate openURL 回来时调用（standby）
 - (void)handleStandbyURL:(NSURL *)url {
-    [[ProbeLogger shared] log:@"[支付宝] 收到回跳 URL：%@", url.absoluteString];
+    NSString *full = url.absoluteString ?: @"";
+    [[ProbeLogger shared] noteIncomingURL:full];
+    [[ProbeLogger shared] log:@"[支付宝] 收到回跳完整 URL（%lu 字符）:\n%@",
+        (unsigned long)full.length, full];
 
     // alipays://platformapi/startapp?...&launchKey=... 不是授权结果，
     // 而是百度发起的「唤起式授权请求」被系统投递到本 App。
