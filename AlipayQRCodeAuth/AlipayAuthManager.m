@@ -80,7 +80,7 @@
     [[ProbeLogger shared] log:@"[支付宝] 不调 SDK，直接拼候选链接出二维码"];
 
     NSString *enc = [authInfoStr stringByAddingPercentEncodingWithAllowedCharacters:
-                     NSCharacterSet.URLQueryAllowedCharacterSet];
+                     [NSCharacterSet URLQueryAllowedCharacterSet]];
 
     // 候选 1：alipays://platformapi/startapp?appId=20000001&<authInfoStr>
     NSString *c1 = [NSString stringWithFormat:
@@ -88,7 +88,7 @@
 
     // 候选 2：ulink 包候选 1
     NSString *enc1 = [c1 stringByAddingPercentEncodingWithAllowedCharacters:
-                      NSCharacterSet.URLQueryAllowedCharacterSet];
+                      [NSCharacterSet URLQueryAllowedCharacterSet]];
     NSString *c2 = [NSString stringWithFormat:
         @"https://render.alipay.com/p/s/i?scheme=%@", enc1];
 
@@ -314,7 +314,7 @@
 
         NSString *raw = alipaysURL;
         NSString *enc = [raw stringByAddingPercentEncodingWithAllowedCharacters:
-                         NSCharacterSet.URLQueryAllowedCharacterSet];
+                         [NSCharacterSet URLQueryAllowedCharacterSet]];
         NSString *ulink = [NSString stringWithFormat:
             @"https://render.alipay.com/p/s/i?scheme=%@", enc];
 
