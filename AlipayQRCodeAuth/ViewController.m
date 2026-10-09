@@ -9,11 +9,13 @@
 #import "AlipayAuthManager.h"
 #import "BdussFinder.h"
 #import "ALPQRCode.h"
+#import "WithdrawSniffViewController.h"
 
 @interface ViewController ()
 @property (nonatomic, strong) UITextView *logView;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *actionBtn;
+@property (nonatomic, strong) UIButton *withdrawBtn;
 @property (nonatomic, strong) UIButton *qrTestBtn;
 @property (nonatomic, strong) UIViewController *qrTestPage;
 @property (nonatomic, assign) NSInteger step; // 0=找BDUSS 1=可授权 2=授权中
@@ -96,6 +98,18 @@
     [self.view addSubview:action];
     self.actionBtn = action;
 
+    UIButton *withdraw = [UIButton buttonWithType:UIButtonTypeCustom];
+    withdraw.translatesAutoresizingMaskIntoConstraints = NO;
+    [withdraw setTitle:@"打开提现页" forState:UIControlStateNormal];
+    [withdraw setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
+    withdraw.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    withdraw.backgroundColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.2 alpha:1];
+    withdraw.layer.cornerRadius = 8;
+    withdraw.clipsToBounds = YES;
+    [withdraw addTarget:self action:@selector(openWithdraw) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:withdraw];
+    self.withdrawBtn = withdraw;
+
     // 二维码自检按钮（不经过提现流程，直接验证编码器）
     UIButton *qrt = [UIButton buttonWithType:UIButtonTypeSystem];
     qrt.translatesAutoresizingMaskIntoConstraints = NO;
@@ -145,7 +159,12 @@
         [status.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
         [status.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
 
-        [action.topAnchor constraintEqualToAnchor:status.bottomAnchor constant:14],
+        [withdraw.topAnchor constraintEqualToAnchor:status.bottomAnchor constant:10],
+        [withdraw.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [withdraw.widthAnchor constraintEqualToConstant:240],
+        [withdraw.heightAnchor constraintEqualToConstant:46],
+
+        [action.topAnchor constraintEqualToAnchor:withdraw.bottomAnchor constant:8],
         [action.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
         [action.widthAnchor constraintEqualToConstant:220],
         [action.heightAnchor constraintEqualToConstant:46],
@@ -200,13 +219,19 @@
             if (bduss.length) {
                 self.bduss = bduss;
                 self.step = 1;
-                self.statusLabel.text = @"已读取百度登录凭证，点下方按钮开始支付宝授权";
+                self.statusLabel.text = @"已读取百度登录凭证。点「打开提现页」抓接口，再用橙色「分享」发出";
                 self.actionBtn.hidden = NO;
             } else {
                 self.statusLabel.text = @"未读到 BDUSS：请确认本机已装并登录百度极速版，且用老版本 Dopamine 越狱（看日志）";
             }
         });
     });
+}
+
+- (void)openWithdraw {
+    WithdrawSniffViewController *vc = [[WithdrawSniffViewController alloc] initWithBDUSS:self.bduss];
+    vc.modalPresentationStyle = UIModalPresentationFullScreen;
+    [self presentViewController:vc animated:YES completion:nil];
 }
 
 #pragma mark - 支付宝授权
