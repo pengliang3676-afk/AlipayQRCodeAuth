@@ -51,125 +51,127 @@ static NSString * const kBaiduUA = @"Mozilla/5.0 (iPhone; CPU iPhone OS 13_0 lik
 }
 
 - (NSString *)hookSource {
-    return @"(function () {
-  if (window.__probeNetHooked) return;
-  window.__probeNetHooked = true;
-  var CAP = 20000;
-  function skip(url) {
-    var s = String(url || '').split('?')[0].split('#')[0].toLowerCase();
-    var exts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg', '.css', '.js', '.mjs', '.map', '.woff', '.woff2', '.ttf', '.mp4', '.m4a', '.mp3'];
-    for (var i = 0; i < exts.length; i++) {
-      var ext = exts[i];
-      if (s.length >= ext.length && s.lastIndexOf(ext) === s.length - ext.length) return true;
-    }
-    return false;
-  }
-  function fullHit(url) {
-    var s = String(url || '');
-    if (!s || skip(s)) return false;
-    var low = s.toLowerCase();
-    if (low.indexOf('incentive') >= 0) return true;
-    if (low.indexOf('withdraw') >= 0) return true;
-    if (low.indexOf('checkin') >= 0) return true;
-    if (low.indexOf('signin') >= 0) return true;
-    if (low.indexOf('/sign') >= 0) return true;
-    if (low.indexOf('activity.baidu.com') >= 0) return true;
-    if (low.indexOf('mbd.baidu.com') >= 0) return true;
-    return false;
-  }
-  function isBaidu(url) {
-    return String(url || '').toLowerCase().indexOf('baidu.com') >= 0;
-  }
-  function send(payload) {
-    try { window.webkit.messageHandlers.probeNet.postMessage(payload); } catch (e) {}
-  }
-  function emit(kind, method, url, fallbackURL, status, body, req) {
-    var primary = url || fallbackURL || '';
-    var other = fallbackURL || '';
-    if (skip(primary) && (!other || skip(other))) return;
-    var hit = fullHit(primary) || fullHit(other);
-    if (!hit && !isBaidu(primary) && !isBaidu(other)) return;
-    var raw = body == null ? '' : String(body);
-    var cut = raw.length > CAP;
-    var msg = {
-      kind: kind,
-      method: String(method || ''),
-      url: String(primary),
-      status: status == null ? -1 : status,
-      length: raw.length,
-      truncated: cut,
-      hit: hit,
-      body: cut ? raw.slice(0, CAP) : raw
-    };
-    if (req) msg.req = String(req).slice(0, 2000);
-    send(msg);
-  }
-  if (window.fetch) {
-    var origFetch = window.fetch;
-    window.fetch = function (input, init) {
-      var url = '';
-      var method = 'GET';
-      var reqBody = '';
-      try {
-        if (typeof input === 'string') url = input;
-        else if (input && input.url) url = input.url;
-        if (init && init.method) method = init.method;
-        else if (input && input.method) method = input.method;
-        if (init && typeof init.body === 'string') reqBody = init.body;
-      } catch (e0) {}
-      return origFetch.apply(this, arguments).then(function (resp) {
-        var finalURL = (resp && resp.url) || url;
-        if (!(fullHit(finalURL) || fullHit(url) || isBaidu(finalURL) || isBaidu(url))) return resp;
-        if (skip(finalURL) && skip(url)) return resp;
-        var clone;
-        try { clone = resp.clone(); } catch (e1) {
-          emit('fetch', method, finalURL, url, resp.status, '[clone failed]', reqBody);
-          return resp;
-        }
-        clone.text().then(function (t) {
-          emit('fetch', method, finalURL, url, resp.status, t, reqBody);
-        }).catch(function () {
-          emit('fetch', method, finalURL, url, resp.status, '[read failed]', reqBody);
-        });
-        return resp;
-      }).catch(function (err) {
-        emit('fetch', method, url, url, 0, '[network] ' + (err && err.message ? err.message : err), reqBody);
-        throw err;
-      });
-    };
-  }
-  if (window.XMLHttpRequest) {
-    var xo = XMLHttpRequest.prototype.open;
-    var xs = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (method, url) {
-      this.__probeMethod = method;
-      this.__probeURL = url;
-      return xo.apply(this, arguments);
-    };
-    XMLHttpRequest.prototype.send = function (body) {
-      var xhr = this;
-      var reqBody = (typeof body === 'string') ? body : '';
-      xhr.addEventListener('loadend', function () {
-        var finalURL = '';
-        try { finalURL = xhr.responseURL || xhr.__probeURL || ''; }
-        catch (e2) { finalURL = xhr.__probeURL || ''; }
-        var text = '';
-        try { text = xhr.responseText || ''; }
-        catch (e3) { text = '[unreadable]'; }
-        emit('xhr', xhr.__probeMethod, finalURL, xhr.__probeURL, xhr.status, text, reqBody);
-      });
-      return xs.apply(this, arguments);
-    };
-  }
-  if (navigator.sendBeacon) {
-    var origBeacon = navigator.sendBeacon.bind(navigator);
-    navigator.sendBeacon = function (url, data) {
-      var reqBody = (typeof data === 'string') ? data : '';
-      emit('beacon', 'POST', url, url, 0, '[sendBeacon 无响应体]', reqBody);
-      return origBeacon(url, data);
-    };
-  }
-})();";
+    // 一行一个字面量再拼接。@"" 不能包含裸换行，否则 clang 会在第一行
+    // 结束字符串，后面的 JavaScript 会被当成 Objective-C。
+    return @"(function () {\n"
+            "  if (window.__probeNetHooked) return;\n"
+            "  window.__probeNetHooked = true;\n"
+            "  var CAP = 20000;\n"
+            "  function skip(url) {\n"
+            "    var s = String(url || '').split('?')[0].split('#')[0].toLowerCase();\n"
+            "    var exts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg', '.css', '.js', '.mjs', '.map', '.woff', '.woff2', '.ttf', '.mp4', '.m4a', '.mp3'];\n"
+            "    for (var i = 0; i < exts.length; i++) {\n"
+            "      var ext = exts[i];\n"
+            "      if (s.length >= ext.length && s.lastIndexOf(ext) === s.length - ext.length) return true;\n"
+            "    }\n"
+            "    return false;\n"
+            "  }\n"
+            "  function fullHit(url) {\n"
+            "    var s = String(url || '');\n"
+            "    if (!s || skip(s)) return false;\n"
+            "    var low = s.toLowerCase();\n"
+            "    if (low.indexOf('incentive') >= 0) return true;\n"
+            "    if (low.indexOf('withdraw') >= 0) return true;\n"
+            "    if (low.indexOf('checkin') >= 0) return true;\n"
+            "    if (low.indexOf('signin') >= 0) return true;\n"
+            "    if (low.indexOf('/sign') >= 0) return true;\n"
+            "    if (low.indexOf('activity.baidu.com') >= 0) return true;\n"
+            "    if (low.indexOf('mbd.baidu.com') >= 0) return true;\n"
+            "    return false;\n"
+            "  }\n"
+            "  function isBaidu(url) {\n"
+            "    return String(url || '').toLowerCase().indexOf('baidu.com') >= 0;\n"
+            "  }\n"
+            "  function send(payload) {\n"
+            "    try { window.webkit.messageHandlers.probeNet.postMessage(payload); } catch (e) {}\n"
+            "  }\n"
+            "  function emit(kind, method, url, fallbackURL, status, body, req) {\n"
+            "    var primary = url || fallbackURL || '';\n"
+            "    var other = fallbackURL || '';\n"
+            "    if (skip(primary) && (!other || skip(other))) return;\n"
+            "    var hit = fullHit(primary) || fullHit(other);\n"
+            "    if (!hit && !isBaidu(primary) && !isBaidu(other)) return;\n"
+            "    var raw = body == null ? '' : String(body);\n"
+            "    var cut = raw.length > CAP;\n"
+            "    var msg = {\n"
+            "      kind: kind,\n"
+            "      method: String(method || ''),\n"
+            "      url: String(primary),\n"
+            "      status: status == null ? -1 : status,\n"
+            "      length: raw.length,\n"
+            "      truncated: cut,\n"
+            "      hit: hit,\n"
+            "      body: cut ? raw.slice(0, CAP) : raw\n"
+            "    };\n"
+            "    if (req) msg.req = String(req).slice(0, 2000);\n"
+            "    send(msg);\n"
+            "  }\n"
+            "  if (window.fetch) {\n"
+            "    var origFetch = window.fetch;\n"
+            "    window.fetch = function (input, init) {\n"
+            "      var url = '';\n"
+            "      var method = 'GET';\n"
+            "      var reqBody = '';\n"
+            "      try {\n"
+            "        if (typeof input === 'string') url = input;\n"
+            "        else if (input && input.url) url = input.url;\n"
+            "        if (init && init.method) method = init.method;\n"
+            "        else if (input && input.method) method = input.method;\n"
+            "        if (init && typeof init.body === 'string') reqBody = init.body;\n"
+            "      } catch (e0) {}\n"
+            "      return origFetch.apply(this, arguments).then(function (resp) {\n"
+            "        var finalURL = (resp && resp.url) || url;\n"
+            "        if (!(fullHit(finalURL) || fullHit(url) || isBaidu(finalURL) || isBaidu(url))) return resp;\n"
+            "        if (skip(finalURL) && skip(url)) return resp;\n"
+            "        var clone;\n"
+            "        try { clone = resp.clone(); } catch (e1) {\n"
+            "          emit('fetch', method, finalURL, url, resp.status, '[clone failed]', reqBody);\n"
+            "          return resp;\n"
+            "        }\n"
+            "        clone.text().then(function (t) {\n"
+            "          emit('fetch', method, finalURL, url, resp.status, t, reqBody);\n"
+            "        }).catch(function () {\n"
+            "          emit('fetch', method, finalURL, url, resp.status, '[read failed]', reqBody);\n"
+            "        });\n"
+            "        return resp;\n"
+            "      }).catch(function (err) {\n"
+            "        emit('fetch', method, url, url, 0, '[network] ' + (err && err.message ? err.message : err), reqBody);\n"
+            "        throw err;\n"
+            "      });\n"
+            "    };\n"
+            "  }\n"
+            "  if (window.XMLHttpRequest) {\n"
+            "    var xo = XMLHttpRequest.prototype.open;\n"
+            "    var xs = XMLHttpRequest.prototype.send;\n"
+            "    XMLHttpRequest.prototype.open = function (method, url) {\n"
+            "      this.__probeMethod = method;\n"
+            "      this.__probeURL = url;\n"
+            "      return xo.apply(this, arguments);\n"
+            "    };\n"
+            "    XMLHttpRequest.prototype.send = function (body) {\n"
+            "      var xhr = this;\n"
+            "      var reqBody = (typeof body === 'string') ? body : '';\n"
+            "      xhr.addEventListener('loadend', function () {\n"
+            "        var finalURL = '';\n"
+            "        try { finalURL = xhr.responseURL || xhr.__probeURL || ''; }\n"
+            "        catch (e2) { finalURL = xhr.__probeURL || ''; }\n"
+            "        var text = '';\n"
+            "        try { text = xhr.responseText || ''; }\n"
+            "        catch (e3) { text = '[unreadable]'; }\n"
+            "        emit('xhr', xhr.__probeMethod, finalURL, xhr.__probeURL, xhr.status, text, reqBody);\n"
+            "      });\n"
+            "      return xs.apply(this, arguments);\n"
+            "    };\n"
+            "  }\n"
+            "  if (navigator.sendBeacon) {\n"
+            "    var origBeacon = navigator.sendBeacon.bind(navigator);\n"
+            "    navigator.sendBeacon = function (url, data) {\n"
+            "      var reqBody = (typeof data === 'string') ? data : '';\n"
+            "      emit('beacon', 'POST', url, url, 0, '[sendBeacon 无响应体]', reqBody);\n"
+            "      return origBeacon(url, data);\n"
+            "    };\n"
+            "  }\n"
+            "})();";
 }
 
 #pragma mark - UI
